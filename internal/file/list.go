@@ -5,7 +5,7 @@ import (
 )
 
 type ListFilesRequest struct {
-	ParentID uint   // 指定目录
+	ParentID string // 指定目录
 	OwnerID  uint   // 当前用户
 	Page     int    // 页码
 	PageSize int    // 每页数量

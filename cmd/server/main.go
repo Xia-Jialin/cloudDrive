@@ -82,7 +82,7 @@ func LoginHandler(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param Authorization header string true "Bearer Token"
-// @Param parent_id query int false "父目录ID，根目录为0"
+// @Param parent_id query string false "父目录ID，根目录为0"
 // @Param page query int false "页码，默认1"
 // @Param page_size query int false "每页数量，默认10"
 // @Param order_by query string false "排序字段，默认upload_time"
@@ -105,13 +105,13 @@ func FileListHandler(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
 		return
 	}
-	parentID, _ := strconv.ParseUint(c.DefaultQuery("parent_id", "0"), 10, 64)
+	parentID := c.DefaultQuery("parent_id", "")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 	orderBy := c.DefaultQuery("order_by", "upload_time")
 	order := c.DefaultQuery("order", "desc")
 	resp, err := file.ListFiles(db, file.ListFilesRequest{
-		ParentID: uint(parentID),
+		ParentID: parentID,
 		OwnerID:  claims.UserID,
 		Page:     page,
 		PageSize: pageSize,
@@ -154,7 +154,7 @@ func FileListHandler(c *gin.Context) {
 // @Produce json
 // @Param Authorization header string true "Bearer Token"
 // @Param file formData file true "文件"
-// @Param parent_id formData int false "父目录ID，根目录为0"
+// @Param parent_id formData string false "父目录ID，根目录为0"
 // @Success 200 {object} map[string]interface{}
 // @Failure 401 {object} map[string]interface{}
 // @Failure 500 {object} map[string]interface{}
@@ -179,13 +179,7 @@ func FileUploadHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "未选择文件"})
 		return
 	}
-	parentIDStr := c.PostForm("parent_id")
-	parentID := uint(0)
-	if parentIDStr != "" {
-		if v, err := strconv.ParseUint(parentIDStr, 10, 64); err == nil {
-			parentID = uint(v)
-		}
-	}
+	parentID := c.PostForm("parent_id")
 
 	// 1. 读取文件内容并计算哈希
 	fileObj, err := fileHeader.Open()
@@ -251,7 +245,7 @@ func FileUploadHandler(c *gin.Context) {
 // @Accept json
 // @Produce application/octet-stream
 // @Param Authorization header string true "Bearer Token"
-// @Param id path int true "文件ID"
+// @Param id path string true "文件ID"
 // @Success 200 {file} file
 // @Failure 401 {object} map[string]interface{}
 // @Failure 403 {object} map[string]interface{}
@@ -273,14 +267,8 @@ func FileDownloadHandler(c *gin.Context) {
 		return
 	}
 	idStr := c.Param("id")
-	var fileID uint64
-	fileID, err = strconv.ParseUint(idStr, 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "文件ID无效"})
-		return
-	}
 	var f file.File
-	err = db.First(&f, "id = ?", fileID).Error
+	err = db.First(&f, "id = ?", idStr).Error
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
 		return
@@ -303,7 +291,7 @@ func FileDownloadHandler(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param Authorization header string true "Bearer Token"
-// @Param id path int true "文件ID"
+// @Param id path string true "文件ID"
 // @Success 200 {object} map[string]interface{}
 // @Failure 401 {object} map[string]interface{}
 // @Failure 403 {object} map[string]interface{}
@@ -325,12 +313,7 @@ func FileDeleteHandler(c *gin.Context) {
 		return
 	}
 	idStr := c.Param("id")
-	fileID, err := strconv.ParseUint(idStr, 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "文件ID无效"})
-		return
-	}
-	err = file.DeleteFile(db, uint(fileID), claims.UserID)
+	err = file.DeleteFile(db, idStr, claims.UserID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
@@ -352,7 +335,7 @@ func FileDeleteHandler(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param Authorization header string true "Bearer Token"
-// @Param id path int true "文件ID"
+// @Param id path string true "文件ID"
 // @Param data body file.RenameFileRequest true "新文件名"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {object} map[string]interface{}
@@ -376,17 +359,12 @@ func FileRenameHandler(c *gin.Context) {
 		return
 	}
 	idStr := c.Param("id")
-	fileID, err := strconv.ParseUint(idStr, 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "文件ID无效"})
-		return
-	}
 	var req file.RenameFileRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.NewName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "新文件名不能为空"})
 		return
 	}
-	err = file.RenameFile(db, uint(fileID), claims.UserID, req.NewName)
+	err = file.RenameFile(db, idStr, claims.UserID, req.NewName)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})

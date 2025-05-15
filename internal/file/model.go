@@ -5,6 +5,7 @@ import (
 
 	"errors"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -15,21 +16,28 @@ type FileContent struct {
 }
 
 type File struct {
-	ID         uint           `gorm:"primaryKey" json:"id"`
+	ID         string         `gorm:"type:char(36);primaryKey" json:"id"`
 	Name       string         `gorm:"size:255" json:"name"`
 	Hash       string         `gorm:"size:64;index" json:"hash"` // 外键关联 FileContent
 	Type       string         `gorm:"size:20" json:"type"`
-	ParentID   uint           `json:"parent_id"`
+	ParentID   string         `json:"parent_id"`
 	OwnerID    uint           `json:"owner_id"`
 	UploadTime time.Time      `json:"upload_time"`
 	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
 	// 可扩展更多字段，如分享状态、权限等
 }
 
+func (f *File) BeforeCreate(tx *gorm.DB) (err error) {
+	if f.ID == "" {
+		f.ID = uuid.New().String()
+	}
+	return
+}
+
 var ErrNameExists = errors.New("同目录下已存在同名文件")
 
 // RenameFile 重命名指定ID的文件，只有所有者可以重命名，且同目录下文件名需唯一
-func RenameFile(db *gorm.DB, fileID uint, ownerID uint, newName string) error {
+func RenameFile(db *gorm.DB, fileID string, ownerID uint, newName string) error {
 	var f File
 	if err := db.First(&f, "id = ?", fileID).Error; err != nil {
 		return err
