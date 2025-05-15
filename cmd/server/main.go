@@ -122,7 +122,29 @@ func FileListHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, resp)
+
+	// 为每个文件补充size字段
+	filesWithSize := make([]gin.H, 0, len(resp.Files))
+	for _, f := range resp.Files {
+		fileMap := gin.H{
+			"id":          f.ID,
+			"name":        f.Name,
+			"hash":        f.Hash,
+			"type":        f.Type,
+			"parent_id":   f.ParentID,
+			"owner_id":    f.OwnerID,
+			"upload_time": f.UploadTime,
+		}
+		if f.Type == "file" {
+			var fc file.FileContent
+			db.First(&fc, "hash = ?", f.Hash)
+			fileMap["size"] = fc.Size
+		} else {
+			fileMap["size"] = nil
+		}
+		filesWithSize = append(filesWithSize, fileMap)
+	}
+	c.JSON(http.StatusOK, gin.H{"files": filesWithSize, "total": resp.Total})
 }
 
 // @Summary 上传文件
