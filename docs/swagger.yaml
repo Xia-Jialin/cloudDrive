@@ -6,13 +6,13 @@ definitions:
         description: 外键关联 FileContent
         type: string
       id:
-        type: integer
+        type: string
       name:
         type: string
       owner_id:
         type: integer
       parent_id:
-        type: integer
+        type: string
       type:
         type: string
       upload_time:
@@ -81,7 +81,7 @@ paths:
       - description: 父目录ID，根目录为0
         in: query
         name: parent_id
-        type: integer
+        type: string
       - description: 页码，默认1
         in: query
         name: page
@@ -133,7 +133,7 @@ paths:
         in: path
         name: id
         required: true
-        type: integer
+        type: string
       produces:
       - application/json
       responses:
@@ -180,7 +180,7 @@ paths:
         in: path
         name: id
         required: true
-        type: integer
+        type: string
       - description: 新文件名
         in: body
         name: data
@@ -238,7 +238,7 @@ paths:
         in: path
         name: id
         required: true
-        type: integer
+        type: string
       produces:
       - application/octet-stream
       responses:
@@ -288,7 +288,7 @@ paths:
       - description: 父目录ID，根目录为0
         in: formData
         name: parent_id
-        type: integer
+        type: string
       produces:
       - application/json
       responses:

@@ -31,7 +31,7 @@
                         "required": true
                     },
                     {
-                        "type": "integer",
+                        "type": "string",
                         "description": "父目录ID，根目录为0",
                         "name": "parent_id",
                         "in": "query"
@@ -107,7 +107,7 @@
                         "required": true
                     },
                     {
-                        "type": "integer",
+                        "type": "string",
                         "description": "文件ID",
                         "name": "id",
                         "in": "path",
@@ -181,7 +181,7 @@
                         "required": true
                     },
                     {
-                        "type": "integer",
+                        "type": "string",
                         "description": "父目录ID，根目录为0",
                         "name": "parent_id",
                         "in": "formData"
@@ -234,7 +234,7 @@
                         "required": true
                     },
                     {
-                        "type": "integer",
+                        "type": "string",
                         "description": "文件ID",
                         "name": "id",
                         "in": "path",
@@ -302,7 +302,7 @@
                         "required": true
                     },
                     {
-                        "type": "integer",
+                        "type": "string",
                         "description": "文件ID",
                         "name": "id",
                         "in": "path",
@@ -458,7 +458,7 @@
                     "type": "string"
                 },
                 "id": {
-                    "type": "integer"
+                    "type": "string"
                 },
                 "name": {
                     "type": "string"
@@ -467,7 +467,7 @@
                     "type": "integer"
                 },
                 "parent_id": {
-                    "type": "integer"
+                    "type": "string"
                 },
                 "type": {
                     "type": "string"

@@ -37,7 +37,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "integer",
+                        "type": "string",
                         "description": "父目录ID，根目录为0",
                         "name": "parent_id",
                         "in": "query"
@@ -113,7 +113,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "integer",
+                        "type": "string",
                         "description": "文件ID",
                         "name": "id",
                         "in": "path",
@@ -187,7 +187,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "integer",
+                        "type": "string",
                         "description": "父目录ID，根目录为0",
                         "name": "parent_id",
                         "in": "formData"
@@ -240,7 +240,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "integer",
+                        "type": "string",
                         "description": "文件ID",
                         "name": "id",
                         "in": "path",
@@ -308,7 +308,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "integer",
+                        "type": "string",
                         "description": "文件ID",
                         "name": "id",
                         "in": "path",
@@ -464,7 +464,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "id": {
-                    "type": "integer"
+                    "type": "string"
                 },
                 "name": {
                     "type": "string"
@@ -473,7 +473,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "parent_id": {
-                    "type": "integer"
+                    "type": "string"
                 },
                 "type": {
                     "type": "string"

@@ -129,7 +129,6 @@ func FileListHandler(c *gin.Context) {
 		fileMap := gin.H{
 			"id":          f.ID,
 			"name":        f.Name,
-			"hash":        f.Hash,
 			"type":        f.Type,
 			"parent_id":   f.ParentID,
 			"owner_id":    f.OwnerID,
