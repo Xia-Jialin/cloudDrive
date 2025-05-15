@@ -87,7 +87,20 @@ const FileListPage = () => {
   };
 
   const handleDelete = async (file) => {
-    message.info('删除功能待实现');
+    const token = localStorage.getItem('token');
+    if (!token) {
+      message.error('请先登录');
+      return;
+    }
+    try {
+      await axios.delete(`/api/files/${file.id}`, {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      message.success('删除成功');
+      fetchFiles();
+    } catch (e) {
+      message.error(e.response?.data?.error || '删除失败');
+    }
   };
 
   const handleUpload = async ({ file }) => {

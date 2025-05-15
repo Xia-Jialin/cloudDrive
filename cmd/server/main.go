@@ -234,6 +234,55 @@ func FileDownloadHandler(c *gin.Context) {
 	c.FileAttachment(filePath, f.Name)
 }
 
+// @Summary 删除文件
+// @Description 删除指定文件
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer Token"
+// @Param id path int true "文件ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 403 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/{id} [delete]
+func FileDeleteHandler(c *gin.Context) {
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	idStr := c.Param("id")
+	fileID, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件ID无效"})
+		return
+	}
+	err = file.DeleteFile(db, uint(fileID), claims.UserID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+			return
+		}
+		if err == file.ErrNoPermission {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权限删除该文件"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+}
+
 func main() {
 	dsn := "root:123456@tcp(127.0.0.1:3306)/clouddrive?charset=utf8mb4&parseTime=True&loc=Local"
 	var err error
@@ -260,6 +309,9 @@ func main() {
 
 	// 文件下载接口
 	r.GET("/api/files/download/:id", FileDownloadHandler)
+
+	// 文件删除接口
+	r.DELETE("/api/files/:id", FileDeleteHandler)
 
 	// 在r.Run前注册Swagger路由
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
