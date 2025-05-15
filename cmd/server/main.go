@@ -293,7 +293,7 @@ func FileDownloadHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "只能下载文件类型"})
 		return
 	}
-	filePath := "uploads/" + f.Name
+	filePath := "uploads/" + f.Hash
 	c.FileAttachment(filePath, f.Name)
 }
 
