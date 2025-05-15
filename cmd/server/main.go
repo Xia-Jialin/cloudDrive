@@ -1,13 +1,16 @@
 package main
 
 import (
+	"cloudDrive/internal/file"
 	"cloudDrive/internal/user"
 	"log"
 	"net/http"
+	"strconv"
 
 	_ "cloudDrive/docs"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"gorm.io/driver/mysql"
@@ -68,6 +71,55 @@ func LoginHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// @Summary 获取文件/文件夹列表
+// @Description 获取指定目录下的文件和文件夹，支持分页和排序
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer Token"
+// @Param parent_id query int false "父目录ID，根目录为0"
+// @Param page query int false "页码，默认1"
+// @Param page_size query int false "每页数量，默认10"
+// @Param order_by query string false "排序字段，默认upload_time"
+// @Param order query string false "排序方式，asc/desc，默认desc"
+// @Success 200 {object} file.ListFilesResponse
+// @Failure 401 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files [get]
+func FileListHandler(c *gin.Context) {
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	parentID, _ := strconv.ParseUint(c.DefaultQuery("parent_id", "0"), 10, 64)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	orderBy := c.DefaultQuery("order_by", "upload_time")
+	order := c.DefaultQuery("order", "desc")
+	resp, err := file.ListFiles(db, file.ListFilesRequest{
+		ParentID: uint(parentID),
+		OwnerID:  claims.UserID,
+		Page:     page,
+		PageSize: pageSize,
+		OrderBy:  orderBy,
+		Order:    order,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 func main() {
 	dsn := "root:123456@tcp(127.0.0.1:3306)/clouddrive?charset=utf8mb4&parseTime=True&loc=Local"
 	var err error
@@ -75,13 +127,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("数据库连接失败: %v", err)
 	}
-	// 自动迁移用户表
-	db.AutoMigrate(&user.User{})
+	// 自动迁移用户表和文件表，并捕获错误
+	err = db.AutoMigrate(&user.User{}, &file.File{})
+	if err != nil {
+		log.Fatalf("AutoMigrate failed: %v", err)
+	}
 
 	r := gin.Default()
 
 	r.POST("/api/user/register", RegisterHandler)
 	r.POST("/api/user/login", LoginHandler)
+
+	// 文件列表获取接口
+	r.GET("/api/files", FileListHandler)
 
 	// 在r.Run前注册Swagger路由
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))

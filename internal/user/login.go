@@ -26,6 +26,26 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+// 显式实现 jwt.Claims 接口
+func (c *Claims) GetExpirationTime() (*jwt.NumericDate, error) {
+	return c.RegisteredClaims.ExpiresAt, nil
+}
+func (c *Claims) GetIssuedAt() (*jwt.NumericDate, error) {
+	return c.RegisteredClaims.IssuedAt, nil
+}
+func (c *Claims) GetNotBefore() (*jwt.NumericDate, error) {
+	return c.RegisteredClaims.NotBefore, nil
+}
+func (c *Claims) GetIssuer() (string, error) {
+	return c.RegisteredClaims.Issuer, nil
+}
+func (c *Claims) GetSubject() (string, error) {
+	return c.RegisteredClaims.Subject, nil
+}
+func (c *Claims) GetAudience() (jwt.ClaimStrings, error) {
+	return c.RegisteredClaims.Audience, nil
+}
+
 func Login(db *gorm.DB, req LoginRequest) (*LoginResponse, error) {
 	var user User
 	db.Where("username = ?", req.Username).First(&user)
@@ -48,7 +68,7 @@ func Login(db *gorm.DB, req LoginRequest) (*LoginResponse, error) {
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, &claims)
 	tokenStr, err := token.SignedString([]byte(secret))
 	if err != nil {
 		return nil, errors.New("Token生成失败")

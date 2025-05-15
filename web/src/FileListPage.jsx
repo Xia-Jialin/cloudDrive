@@ -1,82 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb } from 'antd';
 import { UploadOutlined, DownloadOutlined, DeleteOutlined, FolderOpenOutlined, FileOutlined, HomeOutlined } from '@ant-design/icons';
-// import axios from 'axios'; // 暂时不用
+import axios from 'axios';
 
 const { Search } = Input;
 
-// 支持嵌套的 mock 数据
-const mockFilesInit = [
-  {
-    id: 1,
-    name: '文档1.pdf',
-    size: 204800,
-    uploadTime: '2024-06-01 10:00:00',
-    type: 'file',
-  },
-  {
-    id: 2,
-    name: '图片2.png',
-    size: 102400,
-    uploadTime: '2024-06-02 12:30:00',
-    type: 'file',
-  },
-  {
-    id: 3,
-    name: '项目资料',
-    type: 'folder',
-    uploadTime: '2024-06-03 09:15:00',
-    children: [
-      {
-        id: 4,
-        name: '子文档.docx',
-        size: 40960,
-        uploadTime: '2024-06-03 10:00:00',
-        type: 'file',
-      },
-      {
-        id: 5,
-        name: '设计图',
-        type: 'folder',
-        uploadTime: '2024-06-03 11:00:00',
-        children: [
-          {
-            id: 6,
-            name: 'UI.png',
-            size: 20480,
-            uploadTime: '2024-06-03 11:10:00',
-            type: 'file',
-          },
-        ],
-      },
-    ],
-  },
-];
-
-function findFolderByPath(root, pathArr) {
-  let current = root;
-  for (const id of pathArr) {
-    const next = current.find(item => item.id === id && item.type === 'folder');
-    if (!next) return [];
-    current = next.children || [];
-  }
-  return current;
-}
-
-function findBreadcrumb(root, pathArr) {
-  let current = root;
-  const crumbs = [];
-  for (const id of pathArr) {
-    const next = current.find(item => item.id === id && item.type === 'folder');
-    if (!next) break;
-    crumbs.push(next);
-    current = next.children || [];
-  }
-  return crumbs;
-}
-
 const FileListPage = () => {
-  const [mockFiles, setMockFiles] = useState(mockFilesInit);
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -89,21 +18,31 @@ const FileListPage = () => {
   // 获取当前目录下的文件和文件夹
   const fetchFiles = async () => {
     setLoading(true);
-    setTimeout(() => {
-      let list = findFolderByPath(mockFiles, currentPath);
-      if (search) {
-        list = list.filter(f => f.name.includes(search));
-      }
-      setFiles(list.slice((page - 1) * pageSize, page * pageSize));
-      setTotal(list.length);
-      setLoading(false);
-    }, 300);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/files', {
+        headers: { Authorization: 'Bearer ' + token },
+        params: {
+          parent_id: currentPath.length > 0 ? currentPath[currentPath.length - 1] : 0,
+          page,
+          page_size: pageSize,
+          order_by: 'upload_time',
+          order: 'desc',
+          // 可加 search 字段，后端支持时
+        }
+      });
+      setFiles(res.data.files);
+      setTotal(res.data.total);
+    } catch (e) {
+      message.error('获取文件列表失败');
+    }
+    setLoading(false);
   };
 
   useEffect(() => {
     fetchFiles();
     // eslint-disable-next-line
-  }, [search, page, pageSize, mockFiles, currentPath]);
+  }, [search, page, pageSize, currentPath]);
 
   // 进入文件夹
   const enterFolder = (folder) => {
@@ -118,51 +57,17 @@ const FileListPage = () => {
   };
 
   const handleDownload = (file) => {
-    message.info(`模拟下载：${file.name}`);
+    message.info(`下载功能待实现：${file.name}`);
   };
 
   const handleDelete = async (file) => {
-    // 递归删除指定id
-    function deleteById(list, id) {
-      return list.filter(item => {
-        if (item.id === id) return false;
-        if (item.type === 'folder' && item.children) {
-          item.children = deleteById(item.children, id);
-        }
-        return true;
-      });
-    }
-    setMockFiles(prev => deleteById([...prev], file.id));
-    message.success('模拟删除成功');
+    message.info('删除功能待实现');
   };
 
   const handleUpload = async ({ file }) => {
     setUploading(true);
     setTimeout(() => {
-      // 上传到当前目录
-      const newFile = {
-        id: Date.now(),
-        name: file.name,
-        size: file.size || 123456,
-        uploadTime: new Date().toLocaleString(),
-        type: 'file',
-      };
-      function addFileToPath(list, pathArr) {
-        if (pathArr.length === 0) {
-          return [newFile, ...list];
-        }
-        return list.map(item => {
-          if (item.id === pathArr[0] && item.type === 'folder') {
-            return {
-              ...item,
-              children: addFileToPath(item.children || [], pathArr.slice(1)),
-            };
-          }
-          return item;
-        });
-      }
-      setMockFiles(prev => addFileToPath([...prev], currentPath));
-      message.success('模拟上传成功');
+      message.success('上传功能待实现');
       setUploading(false);
     }, 500);
   };
@@ -191,6 +96,7 @@ const FileListPage = () => {
       title: '上传时间',
       dataIndex: 'uploadTime',
       key: 'uploadTime',
+      render: (t) => t ? t.replace('T', ' ').slice(0, 19) : '',
     },
     {
       title: '类型',
@@ -223,9 +129,9 @@ const FileListPage = () => {
     <Breadcrumb.Item key="root" onClick={() => handleBreadcrumbClick(0)} style={{ cursor: 'pointer' }}>
       <HomeOutlined /> 根目录
     </Breadcrumb.Item>,
-    ...findBreadcrumb(mockFiles, currentPath).map((folder, idx) => (
-      <Breadcrumb.Item key={folder.id} onClick={() => handleBreadcrumbClick(idx + 1)} style={{ cursor: 'pointer' }}>
-        <FolderOpenOutlined /> {folder.name}
+    ...currentPath.map((id, idx) => (
+      <Breadcrumb.Item key={id} onClick={() => handleBreadcrumbClick(idx + 1)} style={{ cursor: 'pointer' }}>
+        <FolderOpenOutlined /> {id}
       </Breadcrumb.Item>
     )),
   ];
