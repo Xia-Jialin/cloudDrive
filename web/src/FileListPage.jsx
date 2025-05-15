@@ -66,10 +66,23 @@ const FileListPage = () => {
 
   const handleUpload = async ({ file }) => {
     setUploading(true);
-    setTimeout(() => {
-      message.success('上传功能待实现');
-      setUploading(false);
-    }, 500);
+    try {
+      const token = localStorage.getItem('token');
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('parent_id', currentPath.length > 0 ? currentPath[currentPath.length - 1] : 0);
+      await axios.post('/api/files/upload', formData, {
+        headers: {
+          Authorization: 'Bearer ' + token,
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      message.success('上传成功');
+      fetchFiles();
+    } catch (e) {
+      message.error(e.response?.data?.error || '上传失败');
+    }
+    setUploading(false);
   };
 
   const columns = [

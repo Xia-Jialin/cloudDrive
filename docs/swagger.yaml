@@ -115,6 +115,47 @@ paths:
       summary: 获取文件/文件夹列表
       tags:
       - 文件模块
+  /files/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      description: 上传文件到指定目录
+      parameters:
+      - description: Bearer Token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: 文件
+        in: formData
+        name: file
+        required: true
+        type: file
+      - description: 父目录ID，根目录为0
+        in: formData
+        name: parent_id
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 上传文件
+      tags:
+      - 文件模块
   /user/login:
     post:
       consumes:
