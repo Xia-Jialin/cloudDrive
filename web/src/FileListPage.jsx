@@ -57,7 +57,33 @@ const FileListPage = () => {
   };
 
   const handleDownload = (file) => {
-    message.info(`下载功能待实现：${file.name}`);
+    const token = localStorage.getItem('token');
+    if (!token) {
+      message.error('请先登录');
+      return;
+    }
+    // 创建隐藏a标签实现下载
+    const url = `/api/files/download/${file.id}`;
+    fetch(url, {
+      headers: { Authorization: 'Bearer ' + token },
+    })
+      .then(res => {
+        if (!res.ok) throw new Error('下载失败');
+        return res.blob();
+      })
+      .then(blob => {
+        const a = document.createElement('a');
+        a.href = window.URL.createObjectURL(blob);
+        a.download = file.name;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(a.href);
+        document.body.removeChild(a);
+      })
+      .catch(e => {
+        message.error(e.message || '下载失败');
+      });
   };
 
   const handleDelete = async (file) => {
