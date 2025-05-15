@@ -2,20 +2,18 @@ basePath: /api
 definitions:
   file.File:
     properties:
+      hash:
+        description: 外键关联 FileContent
+        type: string
       id:
         type: integer
       name:
         type: string
       owner_id:
-        description: 所有者用户ID
         type: integer
       parent_id:
-        description: 父目录ID，根目录为0
-        type: integer
-      size:
         type: integer
       type:
-        description: file or folder
         type: string
       upload_time:
         type: string
@@ -28,6 +26,11 @@ definitions:
         type: array
       total:
         type: integer
+    type: object
+  file.RenameFileRequest:
+    properties:
+      new_name:
+        type: string
     type: object
   user.LoginRequest:
     properties:
@@ -113,6 +116,157 @@ paths:
             additionalProperties: true
             type: object
       summary: 获取文件/文件夹列表
+      tags:
+      - 文件模块
+  /files/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定文件
+      parameters:
+      - description: Bearer Token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: 文件ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 删除文件
+      tags:
+      - 文件模块
+  /files/{id}/rename:
+    put:
+      consumes:
+      - application/json
+      description: 重命名指定文件
+      parameters:
+      - description: Bearer Token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: 文件ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 新文件名
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/file.RenameFileRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 重命名文件
+      tags:
+      - 文件模块
+  /files/download/{id}:
+    get:
+      consumes:
+      - application/json
+      description: 下载指定文件
+      parameters:
+      - description: Bearer Token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: 文件ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 下载文件
       tags:
       - 文件模块
   /files/upload:

@@ -324,6 +324,66 @@ func FileDeleteHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
 
+// @Summary 重命名文件
+// @Description 重命名指定文件
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer Token"
+// @Param id path int true "文件ID"
+// @Param data body file.RenameFileRequest true "新文件名"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 403 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/{id}/rename [put]
+func FileRenameHandler(c *gin.Context) {
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	idStr := c.Param("id")
+	fileID, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件ID无效"})
+		return
+	}
+	var req file.RenameFileRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.NewName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "新文件名不能为空"})
+		return
+	}
+	err = file.RenameFile(db, uint(fileID), claims.UserID, req.NewName)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+			return
+		}
+		if err == file.ErrNoPermission {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权限重命名该文件"})
+			return
+		}
+		if err == file.ErrNameExists {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "同目录下已存在同名文件"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "重命名成功"})
+}
+
 func main() {
 	dsn := "root:123456@tcp(127.0.0.1:3306)/clouddrive?charset=utf8mb4&parseTime=True&loc=Local"
 	var err error
@@ -353,6 +413,9 @@ func main() {
 
 	// 文件删除接口
 	r.DELETE("/api/files/:id", FileDeleteHandler)
+
+	// 文件重命名接口
+	r.PUT("/api/files/:id/rename", FileRenameHandler)
 
 	// 在r.Run前注册Swagger路由
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))

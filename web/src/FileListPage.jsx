@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb } from 'antd';
+import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb, Modal } from 'antd';
 import { UploadOutlined, DownloadOutlined, DeleteOutlined, FolderOpenOutlined, FileOutlined, HomeOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
@@ -14,6 +14,7 @@ const FileListPage = () => {
   const [total, setTotal] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [currentPath, setCurrentPath] = useState([]); // 路径为id数组
+  const [renameModal, setRenameModal] = useState({ visible: false, file: null, newName: '' });
 
   // 获取当前目录下的文件和文件夹
   const fetchFiles = async () => {
@@ -124,6 +125,29 @@ const FileListPage = () => {
     setUploading(false);
   };
 
+  const handleRename = (file) => {
+    setRenameModal({ visible: true, file, newName: file.name });
+  };
+
+  const doRename = async () => {
+    const { file, newName } = renameModal;
+    if (!newName || newName === file.name) {
+      message.warning('请输入新的文件名');
+      return;
+    }
+    const token = localStorage.getItem('token');
+    try {
+      await axios.put(`/api/files/${file.id}/rename`, { new_name: newName }, {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      message.success('重命名成功');
+      setRenameModal({ visible: false, file: null, newName: '' });
+      fetchFiles();
+    } catch (e) {
+      message.error(e.response?.data?.error || '重命名失败');
+    }
+  };
+
   const columns = [
     {
       title: '名称',
@@ -166,6 +190,9 @@ const FileListPage = () => {
               下载
             </Button>
           )}
+          <Button onClick={() => handleRename(file)}>
+            重命名
+          </Button>
           <Popconfirm title="确定删除此项吗？" onConfirm={() => handleDelete(file)}>
             <Button icon={<DeleteOutlined />} danger>
               删除
@@ -223,6 +250,21 @@ const FileListPage = () => {
           },
         }}
       />
+      <Modal
+        title="重命名"
+        open={renameModal.visible}
+        onOk={doRename}
+        onCancel={() => setRenameModal({ visible: false, file: null, newName: '' })}
+        okText="确定"
+        cancelText="取消"
+      >
+        <Input
+          value={renameModal.newName}
+          onChange={e => setRenameModal(r => ({ ...r, newName: e.target.value }))}
+          placeholder="请输入新文件名"
+          onPressEnter={doRename}
+        />
+      </Modal>
     </div>
   );
 };
