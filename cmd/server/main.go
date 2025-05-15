@@ -3,8 +3,12 @@ package main
 import (
 	"cloudDrive/internal/file"
 	"cloudDrive/internal/user"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -160,16 +164,53 @@ func FileUploadHandler(c *gin.Context) {
 			parentID = uint(v)
 		}
 	}
-	// 保存文件到本地（可根据实际需求调整存储路径）
-	savePath := "uploads/" + fileHeader.Filename
-	if err := c.SaveUploadedFile(fileHeader, savePath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件保存失败", "detail": err.Error()})
+
+	// 1. 读取文件内容并计算哈希
+	fileObj, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件读取失败", "detail": err.Error()})
 		return
 	}
-	// 写入数据库
+	defer fileObj.Close()
+
+	hashObj := sha256.New()
+	fileBytes, err := io.ReadAll(io.TeeReader(fileObj, hashObj))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件读取失败", "detail": err.Error()})
+		return
+	}
+	hashStr := hex.EncodeToString(hashObj.Sum(nil))
+
+	// 2. 检查 FileContent 是否已存在
+	var fileContent file.FileContent
+	err = db.First(&fileContent, "hash = ?", hashStr).Error
+	if err == gorm.ErrRecordNotFound {
+		// 保存文件到本地，文件名为 hash
+		savePath := "uploads/" + hashStr
+		err = os.WriteFile(savePath, fileBytes, 0644)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "文件保存失败", "detail": err.Error()})
+			return
+		}
+		// 插入 FileContent
+		fileContent = file.FileContent{
+			Hash: hashStr,
+			Size: fileHeader.Size,
+		}
+		err = db.Create(&fileContent).Error
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库写入失败", "detail": err.Error()})
+			return
+		}
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库查询失败", "detail": err.Error()})
+		return
+	}
+
+	// 3. File 表插入记录
 	f := file.File{
 		Name:       fileHeader.Filename,
-		Size:       fileHeader.Size,
+		Hash:       hashStr,
 		Type:       "file",
 		ParentID:   parentID,
 		OwnerID:    claims.UserID,
@@ -179,7 +220,7 @@ func FileUploadHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库写入失败", "detail": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": f.ID, "name": f.Name, "size": f.Size})
+	c.JSON(http.StatusOK, gin.H{"id": f.ID, "name": f.Name, "size": fileContent.Size})
 }
 
 // @Summary 下载文件
@@ -291,7 +332,7 @@ func main() {
 		log.Fatalf("数据库连接失败: %v", err)
 	}
 	// 自动迁移用户表和文件表，并捕获错误
-	err = db.AutoMigrate(&user.User{}, &file.File{})
+	err = db.AutoMigrate(&user.User{}, &file.File{}, &file.FileContent{})
 	if err != nil {
 		log.Fatalf("AutoMigrate failed: %v", err)
 	}
