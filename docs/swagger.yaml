@@ -27,6 +27,11 @@ definitions:
       total:
         type: integer
     type: object
+  file.MoveFileRequest:
+    properties:
+      new_parent_id:
+        type: string
+    type: object
   file.RenameFileRequest:
     properties:
       new_name:
@@ -163,6 +168,64 @@ paths:
             additionalProperties: true
             type: object
       summary: 删除文件
+      tags:
+      - 文件模块
+  /files/{id}/move:
+    put:
+      consumes:
+      - application/json
+      description: 移动指定文件/文件夹到新目录
+      parameters:
+      - description: Bearer Token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: 文件ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 新父目录ID
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/file.MoveFileRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 移动文件/文件夹
       tags:
       - 文件模块
   /files/{id}/rename:

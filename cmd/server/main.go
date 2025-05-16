@@ -179,6 +179,15 @@ func FileUploadHandler(c *gin.Context) {
 		return
 	}
 	parentID := c.PostForm("parent_id")
+	// parentID 为空时查用户根目录
+	if parentID == "" {
+		var userRoot file.UserRoot
+		if err := db.First(&userRoot, "user_id = ?", claims.UserID).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "查找根目录失败", "detail": err.Error()})
+			return
+		}
+		parentID = userRoot.RootID
+	}
 
 	// 1. 读取文件内容并计算哈希
 	fileObj, err := fileHeader.Open()
@@ -431,6 +440,65 @@ func CreateFolderHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"id": folder.ID, "name": folder.Name})
 }
 
+// @Summary 移动文件/文件夹
+// @Description 移动指定文件/文件夹到新目录
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer Token"
+// @Param id path string true "文件ID"
+// @Param data body file.MoveFileRequest true "新父目录ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 403 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/{id}/move [put]
+func FileMoveHandler(c *gin.Context) {
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	idStr := c.Param("id")
+	var req file.MoveFileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "新父目录ID不能为空"})
+		return
+	}
+	err = file.MoveFile(db, idStr, claims.UserID, req.NewParentID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+			return
+		}
+		if err == file.ErrNoPermission {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权限移动该文件"})
+			return
+		}
+		if err == file.ErrNameExists {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "目标目录下已存在同名文件/文件夹"})
+			return
+		}
+		if err == file.ErrMoveToSelfOrChild {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "不能移动到自身或子目录下"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "移动成功"})
+}
+
 func main() {
 	dsn := "root:123456@tcp(127.0.0.1:3306)/clouddrive?charset=utf8mb4&parseTime=True&loc=Local"
 	var err error
@@ -466,6 +534,9 @@ func main() {
 
 	// 新建文件夹接口
 	r.POST("/api/folders", CreateFolderHandler)
+
+	// 移动文件接口
+	r.PUT("/api/files/:id/move", FileMoveHandler)
 
 	// 在r.Run前注册Swagger路由
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))

@@ -35,6 +35,7 @@ func (f *File) BeforeCreate(tx *gorm.DB) (err error) {
 }
 
 var ErrNameExists = errors.New("同目录下已存在同名文件")
+var ErrMoveToSelfOrChild = errors.New("不能移动到自身或子目录下")
 
 // RenameFile 重命名指定ID的文件，只有所有者可以重命名，且同目录下文件名需唯一
 func RenameFile(db *gorm.DB, fileID string, ownerID uint, newName string) error {
@@ -60,6 +61,14 @@ type RenameFileRequest struct {
 
 // CreateFolder 新建文件夹，只有所有者可以新建，且同目录下文件夹名需唯一
 func CreateFolder(db *gorm.DB, name, parentID string, ownerID uint) (*File, error) {
+	// parentID 为空时查用户根目录
+	if parentID == "" {
+		var userRoot UserRoot
+		if err := db.First(&userRoot, "user_id = ?", ownerID).Error; err != nil {
+			return nil, err
+		}
+		parentID = userRoot.RootID
+	}
 	// 检查同目录下是否有同名文件夹
 	var count int64
 	db.Model(&File{}).Where("parent_id = ? AND name = ? AND type = ?", parentID, name, "folder").Count(&count)
@@ -86,4 +95,57 @@ type UserRoot struct {
 	UserID    uint      `gorm:"primaryKey" json:"user_id"`
 	RootID    string    `gorm:"type:char(36);uniqueIndex" json:"root_id"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// MoveFileRequest 移动文件/文件夹请求
+type MoveFileRequest struct {
+	NewParentID string `json:"new_parent_id"`
+}
+
+// MoveFile 移动指定ID的文件/文件夹到新目录，只有所有者可以移动，且同目录下文件名需唯一
+func MoveFile(db *gorm.DB, fileID string, ownerID uint, newParentID string) error {
+	// newParentID 为空时查用户根目录
+	if newParentID == "" {
+		var userRoot UserRoot
+		if err := db.First(&userRoot, "user_id = ?", ownerID).Error; err != nil {
+			return err
+		}
+		newParentID = userRoot.RootID
+	}
+	var f File
+	if err := db.First(&f, "id = ?", fileID).Error; err != nil {
+		return err
+	}
+	if f.OwnerID != ownerID {
+		return ErrNoPermission
+	}
+	if f.ParentID == newParentID {
+		return nil // 已在目标目录，无需移动
+	}
+	// 检查新目录下是否有同名文件/文件夹
+	var count int64
+	db.Model(&File{}).Where("parent_id = ? AND name = ? AND id != ?", newParentID, f.Name, fileID).Count(&count)
+	if count > 0 {
+		return ErrNameExists
+	}
+	// 防止移动到自身或子目录下（仅对文件夹有效）
+	if f.Type == "folder" {
+		if fileID == newParentID {
+			return ErrMoveToSelfOrChild
+		}
+		// 检查newParentID是否为fileID的子孙
+		currentID := newParentID
+		for currentID != "" {
+			if currentID == fileID {
+				return ErrMoveToSelfOrChild
+			}
+			var parent File
+			err := db.Select("parent_id").First(&parent, "id = ?", currentID).Error
+			if err != nil {
+				break
+			}
+			currentID = parent.ParentID
+		}
+	}
+	return db.Model(&f).Update("parent_id", newParentID).Error
 }

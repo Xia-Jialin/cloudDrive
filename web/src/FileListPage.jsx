@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb, Modal } from 'antd';
+import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb, Modal, Select } from 'antd';
 import { UploadOutlined, DownloadOutlined, DeleteOutlined, FolderOpenOutlined, FileOutlined, HomeOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
@@ -17,6 +17,8 @@ const FileListPage = () => {
   const [currentPathNames, setCurrentPathNames] = useState([]); // 路径为名称数组
   const [renameModal, setRenameModal] = useState({ visible: false, file: null, newName: '' });
   const [createFolderModal, setCreateFolderModal] = useState({ visible: false, name: '' });
+  const [moveModal, setMoveModal] = useState({ visible: false, file: null, target: '' });
+  const [folderOptions, setFolderOptions] = useState([]);
 
   // 获取当前目录下的文件和文件夹
   const fetchFiles = async () => {
@@ -178,6 +180,50 @@ const FileListPage = () => {
     }
   };
 
+  // 获取所有可选目标文件夹（简单递归/平铺，实际可优化为树）
+  const fetchAllFolders = async () => {
+    const token = localStorage.getItem('token');
+    let all = [{ label: '/', value: '' }]; // 先加根目录
+    async function fetchFolderChildren(parentId, path = []) {
+      const res = await axios.get('/api/files', {
+        headers: { Authorization: 'Bearer ' + token },
+        params: { parent_id: parentId, page: 1, page_size: 100 }
+      });
+      for (const f of res.data.files) {
+        if (f.type === 'folder') {
+          all.push({ label: [...path, f.name].join('/'), value: f.id });
+          await fetchFolderChildren(f.id, [...path, f.name]);
+        }
+      }
+    }
+    await fetchFolderChildren('');
+    setFolderOptions(all);
+  };
+
+  const handleMove = (file) => {
+    setMoveModal({ visible: true, file, target: '' }); // target: '' 表示根目录
+    fetchAllFolders();
+  };
+
+  const doMove = async () => {
+    const { file, target } = moveModal;
+    if (target === undefined || target === null) { // 允许''作为根目录
+      message.warning('请选择目标文件夹');
+      return;
+    }
+    const token = localStorage.getItem('token');
+    try {
+      await axios.put(`/api/files/${file.id}/move`, { new_parent_id: target }, {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      message.success('移动成功');
+      setMoveModal({ visible: false, file: null, target: '' });
+      fetchFiles();
+    } catch (e) {
+      message.error(e.response?.data?.error || '移动失败');
+    }
+  };
+
   const columns = [
     {
       title: '名称',
@@ -222,6 +268,9 @@ const FileListPage = () => {
           )}
           <Button onClick={() => handleRename(file)}>
             重命名
+          </Button>
+          <Button onClick={() => handleMove(file)}>
+            移动
           </Button>
           <Popconfirm title="确定删除此项吗？" onConfirm={() => handleDelete(file)}>
             <Button icon={<DeleteOutlined />} danger>
@@ -311,6 +360,24 @@ const FileListPage = () => {
           onChange={e => setCreateFolderModal(r => ({ ...r, name: e.target.value }))}
           placeholder="请输入文件夹名"
           onPressEnter={doCreateFolder}
+        />
+      </Modal>
+      <Modal
+        title="移动到..."
+        open={moveModal.visible}
+        onOk={doMove}
+        onCancel={() => setMoveModal({ visible: false, file: null, target: '' })}
+        okText="确定"
+        cancelText="取消"
+      >
+        <Select
+          style={{ width: '100%' }}
+          placeholder="请选择目标文件夹"
+          value={moveModal.target}
+          onChange={v => setMoveModal(m => ({ ...m, target: v }))}
+          options={folderOptions.filter(opt => opt.value !== moveModal.file?.id)}
+          showSearch
+          optionFilterProp="label"
         />
       </Modal>
     </div>
