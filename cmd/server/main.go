@@ -31,7 +31,7 @@ func main() {
 		log.Fatalf("数据库连接失败: %v", err)
 	}
 	// 自动迁移用户表和文件表，并捕获错误
-	err = db.AutoMigrate(&user.User{}, &file.File{}, &file.FileContent{}, &file.UserRoot{})
+	err = db.AutoMigrate(&user.User{}, &file.File{}, &file.FileContent{}, &file.UserRoot{}, &file.Share{})
 	if err != nil {
 		log.Fatalf("AutoMigrate failed: %v", err)
 	}
@@ -54,6 +54,10 @@ func main() {
 	r.PUT("/api/files/:id/rename", handler.FileRenameHandler)
 	r.POST("/api/folders", handler.CreateFolderHandler)
 	r.PUT("/api/files/:id/move", handler.FileMoveHandler)
+	r.POST("/api/share/public", handler.CreatePublicShareHandler)
+	r.GET("/api/share/public", handler.GetPublicShareHandler)
+	r.GET("/api/share/:token", handler.AccessPublicShareHandler)
+	r.GET("/api/share/download/:token", handler.ShareDownloadHandler)
 
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 

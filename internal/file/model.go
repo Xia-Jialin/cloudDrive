@@ -149,3 +149,22 @@ func MoveFile(db *gorm.DB, fileID string, ownerID uint, newParentID string) erro
 	}
 	return db.Model(&f).Update("parent_id", newParentID).Error
 }
+
+// 分享信息表
+// 用于公开/私有/指定用户等多种分享类型
+// ResourceID 可关联文件或文件夹
+// Token 为唯一分享标识
+// ShareType: public/private/user
+// ExpireAt: 过期时间
+// CreatorID: 创建者用户ID
+// CreatedAt: 创建时间
+
+type Share struct {
+	ID         uint64    `gorm:"primaryKey" json:"id"`
+	ResourceID string    `gorm:"not null" json:"resource_id"`
+	ShareType  string    `gorm:"size:20;not null" json:"share_type"`
+	Token      string    `gorm:"size:64;unique;not null" json:"token"`
+	ExpireAt   time.Time `gorm:"not null" json:"expire_at"`
+	CreatorID  uint      `gorm:"not null" json:"creator_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}

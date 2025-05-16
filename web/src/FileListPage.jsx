@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb, Modal, Select, Dropdown, Menu } from 'antd';
-import { UploadOutlined, DownloadOutlined, DeleteOutlined, FolderOpenOutlined, FileOutlined, HomeOutlined, MoreOutlined } from '@ant-design/icons';
+import { UploadOutlined, DownloadOutlined, DeleteOutlined, FolderOpenOutlined, FileOutlined, HomeOutlined, MoreOutlined, CopyOutlined, LinkOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
 const { Search } = Input;
@@ -20,6 +20,7 @@ const FileListPage = () => {
   const [moveModal, setMoveModal] = useState({ visible: false, file: null, target: '' });
   const [folderOptions, setFolderOptions] = useState([]);
   const [dragOverFolderId, setDragOverFolderId] = useState(null); // 拖拽高亮目标文件夹
+  const [shareModal, setShareModal] = useState({ visible: false, file: null, expire: 24, link: '' });
 
   // 获取当前目录下的文件和文件夹
   const fetchFiles = async () => {
@@ -282,6 +283,47 @@ const FileListPage = () => {
     ];
   };
 
+  const handleShare = async (file) => {
+    try {
+      const res = await axios.get('/api/share/public', { params: { resource_id: file.id } });
+      // 自动适配前端端口
+      let frontendOrigin = window.location.origin;
+      if (frontendOrigin.includes(':8080')) {
+        frontendOrigin = frontendOrigin.replace(':8080', ':5173');
+      }
+      const token = res.data.share_link.split('/').pop();
+      setShareModal({ visible: true, file, expire: 24, link: `${frontendOrigin}/share/${token}` });
+      message.info('已存在分享链接，直接展示');
+    } catch (e) {
+      // 未找到分享链接，弹出生成界面
+      setShareModal({ visible: true, file, expire: 24, link: '' });
+    }
+  };
+
+  const doShare = async () => {
+    const { file, expire } = shareModal;
+    if (!expire || expire < 1 || expire > 168) {
+      message.warning('有效期需为1~168小时');
+      return;
+    }
+    try {
+      const res = await axios.post('/api/share/public', {
+        resource_id: file.id,
+        expire_hours: expire,
+      });
+      // 自动适配前端端口
+      let frontendOrigin = window.location.origin;
+      if (frontendOrigin.includes(':8080')) {
+        frontendOrigin = frontendOrigin.replace(':8080', ':5173');
+      }
+      const token = res.data.share_link.split('/').pop();
+      setShareModal(s => ({ ...s, link: `${frontendOrigin}/share/${token}` }));
+      message.success('分享链接已生成');
+    } catch (e) {
+      message.error(e.response?.data?.error || '分享失败');
+    }
+  };
+
   const columns = [
     {
       title: '名称',
@@ -402,6 +444,9 @@ const FileListPage = () => {
                 下载
               </Menu.Item>
             )}
+            <Menu.Item key="share" onClick={() => handleShare(file)} icon={<LinkOutlined />}>
+              分享
+            </Menu.Item>
             <Menu.Item key="rename" onClick={() => handleRename(file)}>
               重命名
             </Menu.Item>
@@ -521,6 +566,38 @@ const FileListPage = () => {
           showSearch
           optionFilterProp="label"
         />
+      </Modal>
+      <Modal
+        title="生成分享链接"
+        open={shareModal.visible}
+        onOk={doShare}
+        onCancel={() => setShareModal({ visible: false, file: null, expire: 24, link: '' })}
+        okText={shareModal.link ? '关闭' : '生成'}
+        cancelText="取消"
+        footer={shareModal.link ? [
+          <Button key="copy" icon={<CopyOutlined />} onClick={() => {navigator.clipboard.writeText(shareModal.link); message.success('已复制');}}>复制链接</Button>,
+          <Button key="close" type="primary" onClick={() => setShareModal({ visible: false, file: null, expire: 24, link: '' })}>关闭</Button>
+        ] : undefined}
+      >
+        <div>
+          <div style={{ marginBottom: 12 }}>
+            有效期（小时，1~168）：
+            <Input
+              type="number"
+              min={1}
+              max={168}
+              value={shareModal.expire}
+              onChange={e => setShareModal(s => ({ ...s, expire: Number(e.target.value) }))}
+              style={{ width: 100, marginLeft: 8 }}
+              disabled={!!shareModal.link}
+            />
+          </div>
+          {shareModal.link && (
+            <div style={{ wordBreak: 'break-all', background: '#f6ffed', padding: 8, borderRadius: 4 }}>
+              <LinkOutlined /> 分享链接：<a href={shareModal.link} target="_blank" rel="noopener noreferrer">{shareModal.link}</a>
+            </div>
+          )}
+        </div>
       </Modal>
     </div>
   );
