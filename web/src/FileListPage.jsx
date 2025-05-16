@@ -19,6 +19,7 @@ const FileListPage = () => {
   const [createFolderModal, setCreateFolderModal] = useState({ visible: false, name: '' });
   const [moveModal, setMoveModal] = useState({ visible: false, file: null, target: '' });
   const [folderOptions, setFolderOptions] = useState([]);
+  const [dragOverFolderId, setDragOverFolderId] = useState(null); // 拖拽高亮目标文件夹
 
   // 获取当前目录下的文件和文件夹
   const fetchFiles = async () => {
@@ -36,7 +37,10 @@ const FileListPage = () => {
           // 可加 search 字段，后端支持时
         }
       });
-      setFiles(res.data.files);
+      setFiles(res.data.files.map(f => ({
+        ...f,
+        uploadTime: f.upload_time,
+      })));
       setTotal(res.data.total);
     } catch (e) {
       message.error('获取文件列表失败');
@@ -224,19 +228,149 @@ const FileListPage = () => {
     }
   };
 
+  // 拖拽移动文件到文件夹
+  const handleMoveByDrag = async (fileId, targetFolderId) => {
+    if (!fileId || fileId === targetFolderId) return;
+    const token = localStorage.getItem('token');
+    try {
+      await axios.put(`/api/files/${fileId}/move`, { new_parent_id: targetFolderId }, {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      message.success('移动成功');
+      fetchFiles();
+    } catch (e) {
+      message.error(e.response?.data?.error || '移动失败');
+    }
+  };
+
+  // 进入上一级目录
+  const goUpOneLevel = () => {
+    if (currentPath.length > 0) {
+      setCurrentPath(currentPath.slice(0, -1));
+      setCurrentPathNames(currentPathNames.slice(0, -1));
+      setPage(1);
+    }
+  };
+
+  // 拖拽到上一级目录
+  const handleMoveToParentByDrag = async (fileId) => {
+    if (!fileId || currentPath.length === 0) return;
+    const parentId = currentPath.length > 1 ? currentPath[currentPath.length - 2] : '';
+    const token = localStorage.getItem('token');
+    try {
+      await axios.put(`/api/files/${fileId}/move`, { new_parent_id: parentId }, {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      message.success('移动成功');
+      fetchFiles();
+    } catch (e) {
+      message.error(e.response?.data?.error || '移动失败');
+    }
+  };
+
+  // 构造带有"../"的文件列表
+  const getDisplayFiles = () => {
+    if (currentPath.length === 0) return files;
+    // 构造"../"虚拟项
+    return [
+      {
+        id: '__up__',
+        name: '../',
+        type: 'up',
+      },
+      ...files,
+    ];
+  };
+
   const columns = [
     {
       title: '名称',
       dataIndex: 'name',
       key: 'name',
-      render: (text, record) =>
-        record.type === 'folder' ? (
-          <span style={{ cursor: 'pointer', color: '#1677ff' }} onClick={() => enterFolder(record)}>
-            <FolderOpenOutlined style={{ marginRight: 6 }} />{text}
-          </span>
-        ) : (
-          <span><FileOutlined style={{ marginRight: 6 }} />{text}</span>
-        ),
+      render: (text, record) => {
+        if (record.type === 'up') {
+          // "../"项
+          return (
+            <span
+              style={{
+                cursor: 'pointer',
+                color: '#faad14',
+                fontStyle: 'italic',
+                background: dragOverFolderId === '__up__' ? '#fffbe6' : undefined,
+                borderRadius: dragOverFolderId === '__up__' ? 4 : undefined,
+                padding: dragOverFolderId === '__up__' ? '0 4px' : undefined,
+              }}
+              onClick={goUpOneLevel}
+              onDragOver={e => {
+                e.preventDefault();
+                setDragOverFolderId('__up__');
+              }}
+              onDragLeave={e => {
+                setDragOverFolderId(null);
+              }}
+              onDrop={async e => {
+                e.preventDefault();
+                setDragOverFolderId(null);
+                const fileId = e.dataTransfer.getData('fileId');
+                if (fileId) {
+                  await handleMoveToParentByDrag(fileId);
+                }
+              }}
+            >
+              <FolderOpenOutlined style={{ marginRight: 6 }} />../
+            </span>
+          );
+        }
+        if (record.type === 'folder') {
+          return (
+            <span
+              style={{
+                cursor: 'pointer',
+                color: '#1677ff',
+                background: dragOverFolderId === record.id ? '#e6f7ff' : undefined,
+                borderRadius: dragOverFolderId === record.id ? 4 : undefined,
+                padding: dragOverFolderId === record.id ? '0 4px' : undefined,
+              }}
+              onClick={() => enterFolder(record)}
+              onDragOver={e => {
+                e.preventDefault();
+                setDragOverFolderId(record.id);
+              }}
+              onDragLeave={e => {
+                setDragOverFolderId(null);
+              }}
+              onDrop={async e => {
+                e.preventDefault();
+                setDragOverFolderId(null);
+                const fileId = e.dataTransfer.getData('fileId');
+                if (fileId && fileId !== record.id) {
+                  await handleMoveByDrag(fileId, record.id);
+                }
+              }}
+              draggable
+              onDragStart={e => {
+                e.dataTransfer.setData('fileId', record.id);
+                e.dataTransfer.setData('fileName', record.name);
+                e.dataTransfer.setData('isFolder', 'true');
+              }}
+            >
+              <FolderOpenOutlined style={{ marginRight: 6 }} />{text}
+            </span>
+          );
+        } else {
+          return (
+            <span
+              draggable
+              onDragStart={e => {
+                e.dataTransfer.setData('fileId', record.id);
+                e.dataTransfer.setData('fileName', record.name);
+              }}
+            >
+              <FileOutlined style={{ marginRight: 6 }} />{text}
+            </span>
+          );
+        }
+      },
     },
     {
       title: '大小',
@@ -319,8 +453,8 @@ const FileListPage = () => {
       </Space>
       <Table
         columns={columns}
-        dataSource={files}
-        rowKey="id"
+        dataSource={getDisplayFiles()}
+        rowKey={record => record.id}
         loading={loading}
         pagination={{
           current: page,
