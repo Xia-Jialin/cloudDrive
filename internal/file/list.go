@@ -25,7 +25,19 @@ func ListFiles(db *gorm.DB, req ListFilesRequest) (*ListFilesResponse, error) {
 	if req.PageSize <= 0 || req.PageSize > 100 {
 		req.PageSize = 10
 	}
-	query := db.Model(&File{}).Where("parent_id = ? AND owner_id = ?", req.ParentID, req.OwnerID)
+
+	parentID := req.ParentID
+	if parentID == "" {
+		// 查询用户根目录ID
+		var userRoot UserRoot
+		err := db.First(&userRoot, "user_id = ?", req.OwnerID).Error
+		if err != nil {
+			return nil, err
+		}
+		parentID = userRoot.RootID
+	}
+
+	query := db.Model(&File{}).Where("parent_id = ?", parentID)
 	if req.OrderBy != "" {
 		order := req.OrderBy
 		if req.Order == "desc" {

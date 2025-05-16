@@ -57,3 +57,33 @@ func RenameFile(db *gorm.DB, fileID string, ownerID uint, newName string) error 
 type RenameFileRequest struct {
 	NewName string `json:"new_name"`
 }
+
+// CreateFolder 新建文件夹，只有所有者可以新建，且同目录下文件夹名需唯一
+func CreateFolder(db *gorm.DB, name, parentID string, ownerID uint) (*File, error) {
+	// 检查同目录下是否有同名文件夹
+	var count int64
+	db.Model(&File{}).Where("parent_id = ? AND name = ? AND type = ?", parentID, name, "folder").Count(&count)
+	if count > 0 {
+		return nil, ErrNameExists
+	}
+	folder := &File{
+		Name:       name,
+		Type:       "folder",
+		ParentID:   parentID,
+		OwnerID:    ownerID,
+		UploadTime: time.Now(),
+	}
+	if err := db.Create(folder).Error; err != nil {
+		return nil, err
+	}
+	return folder, nil
+}
+
+// 用户根目录映射表
+// 每个用户有唯一的根目录ID
+// UserID为用户ID，RootID为根目录文件夹ID
+type UserRoot struct {
+	UserID    uint      `gorm:"primaryKey" json:"user_id"`
+	RootID    string    `gorm:"type:char(36);uniqueIndex" json:"root_id"`
+	CreatedAt time.Time `json:"created_at"`
+}

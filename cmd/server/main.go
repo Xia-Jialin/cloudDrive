@@ -383,6 +383,54 @@ func FileRenameHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "重命名成功"})
 }
 
+// @Summary 新建文件夹
+// @Description 在指定目录下新建文件夹
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer Token"
+// @Param data body CreateFolderRequest true "文件夹信息"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /folders [post]
+type CreateFolderRequest struct {
+	Name     string `json:"name"`
+	ParentID string `json:"parent_id"`
+}
+
+func CreateFolderHandler(c *gin.Context) {
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	var req CreateFolderRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件夹名不能为空"})
+		return
+	}
+	folder, err := file.CreateFolder(db, req.Name, req.ParentID, claims.UserID)
+	if err != nil {
+		if err == file.ErrNameExists {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "同目录下已存在同名文件夹"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": folder.ID, "name": folder.Name})
+}
+
 func main() {
 	dsn := "root:123456@tcp(127.0.0.1:3306)/clouddrive?charset=utf8mb4&parseTime=True&loc=Local"
 	var err error
@@ -391,7 +439,7 @@ func main() {
 		log.Fatalf("数据库连接失败: %v", err)
 	}
 	// 自动迁移用户表和文件表，并捕获错误
-	err = db.AutoMigrate(&user.User{}, &file.File{}, &file.FileContent{})
+	err = db.AutoMigrate(&user.User{}, &file.File{}, &file.FileContent{}, &file.UserRoot{})
 	if err != nil {
 		log.Fatalf("AutoMigrate failed: %v", err)
 	}
@@ -415,6 +463,9 @@ func main() {
 
 	// 文件重命名接口
 	r.PUT("/api/files/:id/rename", FileRenameHandler)
+
+	// 新建文件夹接口
+	r.POST("/api/folders", CreateFolderHandler)
 
 	// 在r.Run前注册Swagger路由
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))

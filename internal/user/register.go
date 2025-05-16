@@ -4,6 +4,8 @@ import (
 	"errors"
 	"log"
 
+	"cloudDrive/internal/file"
+
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -79,6 +81,31 @@ func Register(db *gorm.DB, req RegisterRequest) (*RegisterResponse, error) {
 		log.Printf("[ERROR] 用户创建失败: %v", err)
 		return nil, err
 	}
+
+	// 创建根目录文件夹
+	rootFolder := &file.File{
+		Name:       "根目录",
+		Type:       "folder",
+		ParentID:   "", // 根目录的ParentID为空
+		OwnerID:    user.ID,
+		UploadTime: user.CreatedAt,
+	}
+	if err := db.Create(rootFolder).Error; err != nil {
+		log.Printf("[ERROR] 根目录创建失败: %v", err)
+		return nil, err
+	}
+
+	// 记录用户根目录映射
+	userRoot := &file.UserRoot{
+		UserID:    user.ID,
+		RootID:    rootFolder.ID,
+		CreatedAt: user.CreatedAt,
+	}
+	if err := db.Create(userRoot).Error; err != nil {
+		log.Printf("[ERROR] UserRoot创建失败: %v", err)
+		return nil, err
+	}
+
 	log.Printf("[DEBUG] 用户注册成功: id=%d, username=%s", user.ID, user.Username)
 	return &RegisterResponse{ID: user.ID}, nil
 }

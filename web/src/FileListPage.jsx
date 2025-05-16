@@ -14,7 +14,9 @@ const FileListPage = () => {
   const [total, setTotal] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [currentPath, setCurrentPath] = useState([]); // 路径为id数组
+  const [currentPathNames, setCurrentPathNames] = useState([]); // 路径为名称数组
   const [renameModal, setRenameModal] = useState({ visible: false, file: null, newName: '' });
+  const [createFolderModal, setCreateFolderModal] = useState({ visible: false, name: '' });
 
   // 获取当前目录下的文件和文件夹
   const fetchFiles = async () => {
@@ -24,7 +26,7 @@ const FileListPage = () => {
       const res = await axios.get('/api/files', {
         headers: { Authorization: 'Bearer ' + token },
         params: {
-          parent_id: currentPath.length > 0 ? currentPath[currentPath.length - 1] : 0,
+          parent_id: currentPath.length > 0 ? currentPath[currentPath.length - 1] : "",
           page,
           page_size: pageSize,
           order_by: 'upload_time',
@@ -48,12 +50,14 @@ const FileListPage = () => {
   // 进入文件夹
   const enterFolder = (folder) => {
     setCurrentPath([...currentPath, folder.id]);
+    setCurrentPathNames([...currentPathNames, folder.name]);
     setPage(1);
   };
 
   // 返回上级
   const handleBreadcrumbClick = (idx) => {
     setCurrentPath(currentPath.slice(0, idx));
+    setCurrentPathNames(currentPathNames.slice(0, idx));
     setPage(1);
   };
 
@@ -110,7 +114,7 @@ const FileListPage = () => {
       const token = localStorage.getItem('token');
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('parent_id', currentPath.length > 0 ? currentPath[currentPath.length - 1] : 0);
+      formData.append('parent_id', currentPath.length > 0 ? currentPath[currentPath.length - 1] : "");
       await axios.post('/api/files/upload', formData, {
         headers: {
           Authorization: 'Bearer ' + token,
@@ -145,6 +149,32 @@ const FileListPage = () => {
       fetchFiles();
     } catch (e) {
       message.error(e.response?.data?.error || '重命名失败');
+    }
+  };
+
+  const handleCreateFolder = () => {
+    setCreateFolderModal({ visible: true, name: '' });
+  };
+
+  const doCreateFolder = async () => {
+    const { name } = createFolderModal;
+    if (!name) {
+      message.warning('请输入文件夹名');
+      return;
+    }
+    const token = localStorage.getItem('token');
+    try {
+      await axios.post('/api/folders', {
+        name,
+        parent_id: currentPath.length > 0 ? currentPath[currentPath.length - 1] : "",
+      }, {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      message.success('文件夹创建成功');
+      setCreateFolderModal({ visible: false, name: '' });
+      fetchFiles();
+    } catch (e) {
+      message.error(e.response?.data?.error || '文件夹创建失败');
     }
   };
 
@@ -210,7 +240,7 @@ const FileListPage = () => {
     </Breadcrumb.Item>,
     ...currentPath.map((id, idx) => (
       <Breadcrumb.Item key={id} onClick={() => handleBreadcrumbClick(idx + 1)} style={{ cursor: 'pointer' }}>
-        <FolderOpenOutlined /> {id}
+        <FolderOpenOutlined /> {currentPathNames[idx] || id}
       </Breadcrumb.Item>
     )),
   ];
@@ -225,6 +255,9 @@ const FileListPage = () => {
           enterButton
           allowClear
         />
+        <Button onClick={handleCreateFolder} type="default">
+          新建文件夹
+        </Button>
         <Upload
           customRequest={handleUpload}
           showUploadList={false}
@@ -263,6 +296,21 @@ const FileListPage = () => {
           onChange={e => setRenameModal(r => ({ ...r, newName: e.target.value }))}
           placeholder="请输入新文件名"
           onPressEnter={doRename}
+        />
+      </Modal>
+      <Modal
+        title="新建文件夹"
+        open={createFolderModal.visible}
+        onOk={doCreateFolder}
+        onCancel={() => setCreateFolderModal({ visible: false, name: '' })}
+        okText="确定"
+        cancelText="取消"
+      >
+        <Input
+          value={createFolderModal.name}
+          onChange={e => setCreateFolderModal(r => ({ ...r, name: e.target.value }))}
+          placeholder="请输入文件夹名"
+          onPressEnter={doCreateFolder}
         />
       </Modal>
     </div>
