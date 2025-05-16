@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb, Modal, Select } from 'antd';
-import { UploadOutlined, DownloadOutlined, DeleteOutlined, FolderOpenOutlined, FileOutlined, HomeOutlined } from '@ant-design/icons';
+import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb, Modal, Select, Dropdown, Menu } from 'antd';
+import { UploadOutlined, DownloadOutlined, DeleteOutlined, FolderOpenOutlined, FileOutlined, HomeOutlined, MoreOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
 const { Search } = Input;
@@ -393,26 +393,34 @@ const FileListPage = () => {
     {
       title: '操作',
       key: 'action',
-      render: (_, file) => (
-        <Space>
-          {file.type === 'file' && (
-            <Button icon={<DownloadOutlined />} onClick={() => handleDownload(file)}>
-              下载
-            </Button>
-          )}
-          <Button onClick={() => handleRename(file)}>
-            重命名
-          </Button>
-          <Button onClick={() => handleMove(file)}>
-            移动
-          </Button>
-          <Popconfirm title="确定删除此项吗？" onConfirm={() => handleDelete(file)}>
-            <Button icon={<DeleteOutlined />} danger>
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
+      render: (_, file) => {
+        if (file.type === 'up') return null;
+        const moreMenu = (
+          <Menu>
+            {file.type === 'file' && (
+              <Menu.Item key="download" onClick={() => handleDownload(file)} icon={<DownloadOutlined />}>
+                下载
+              </Menu.Item>
+            )}
+            <Menu.Item key="rename" onClick={() => handleRename(file)}>
+              重命名
+            </Menu.Item>
+            <Menu.Item key="move" onClick={() => handleMove(file)}>
+              移动
+            </Menu.Item>
+            <Menu.Item key="delete">
+              <Popconfirm title="确定删除此项吗？" onConfirm={() => handleDelete(file)}>
+                <span style={{ color: '#ff4d4f' }}>删除</span>
+              </Popconfirm>
+            </Menu.Item>
+          </Menu>
+        );
+        return (
+          <Dropdown overlay={moreMenu} trigger={['click']}>
+            <Button icon={<MoreOutlined />} />
+          </Dropdown>
+        );
+      },
     },
   ];
 
