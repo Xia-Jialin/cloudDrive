@@ -1,0 +1,385 @@
+package handler
+
+import (
+	"cloudDrive/internal/file"
+	"cloudDrive/internal/user"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
+	"gorm.io/gorm"
+)
+
+// @Summary 获取文件/文件夹列表
+// @Description 获取指定目录下的文件和文件夹，支持分页和排序
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer Token"
+// @Param parent_id query string false "父目录ID，根目录为0"
+// @Param page query int false "页码，默认1"
+// @Param page_size query int false "每页数量，默认10"
+// @Param order_by query string false "排序字段，默认upload_time"
+// @Param order query string false "排序方式，asc/desc，默认desc"
+// @Success 200 {object} file.ListFilesResponse
+// @Failure 401 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files [get]
+func FileListHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	parentID := c.DefaultQuery("parent_id", "")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	orderBy := c.DefaultQuery("order_by", "upload_time")
+	order := c.DefaultQuery("order", "desc")
+	resp, err := file.ListFiles(db, file.ListFilesRequest{
+		ParentID: parentID,
+		OwnerID:  claims.UserID,
+		Page:     page,
+		PageSize: pageSize,
+		OrderBy:  orderBy,
+		Order:    order,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	filesWithSize := make([]gin.H, 0, len(resp.Files))
+	for _, f := range resp.Files {
+		fileMap := gin.H{
+			"id":          f.ID,
+			"name":        f.Name,
+			"type":        f.Type,
+			"parent_id":   f.ParentID,
+			"owner_id":    f.OwnerID,
+			"upload_time": f.UploadTime,
+		}
+		if f.Type == "file" {
+			var fc file.FileContent
+			db.First(&fc, "hash = ?", f.Hash)
+			fileMap["size"] = fc.Size
+		} else {
+			fileMap["size"] = nil
+		}
+		filesWithSize = append(filesWithSize, fileMap)
+	}
+	c.JSON(http.StatusOK, gin.H{"files": filesWithSize, "total": resp.Total})
+}
+
+// @Summary 上传文件
+// @Description 上传文件到指定目录
+// @Tags 文件模块
+// @Accept multipart/form-data
+// @Produce json
+// @Param Authorization header string true "Bearer Token"
+// @Param file formData file true "文件"
+// @Param parent_id formData string false "父目录ID，根目录为0"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/upload [post]
+func FileUploadHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "未选择文件"})
+		return
+	}
+	parentID := c.PostForm("parent_id")
+	if parentID == "" {
+		var userRoot file.UserRoot
+		if err := db.First(&userRoot, "user_id = ?", claims.UserID).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "查找根目录失败", "detail": err.Error()})
+			return
+		}
+		parentID = userRoot.RootID
+	}
+	fileObj, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件读取失败", "detail": err.Error()})
+		return
+	}
+	defer fileObj.Close()
+	hashObj := sha256.New()
+	fileBytes, err := io.ReadAll(io.TeeReader(fileObj, hashObj))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件读取失败", "detail": err.Error()})
+		return
+	}
+	hashStr := hex.EncodeToString(hashObj.Sum(nil))
+	var fileContent file.FileContent
+	err = db.First(&fileContent, "hash = ?", hashStr).Error
+	if err == gorm.ErrRecordNotFound {
+		savePath := "uploads/" + hashStr
+		err = os.WriteFile(savePath, fileBytes, 0644)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "文件保存失败", "detail": err.Error()})
+			return
+		}
+		fileContent = file.FileContent{
+			Hash: hashStr,
+			Size: fileHeader.Size,
+		}
+		err = db.Create(&fileContent).Error
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库写入失败", "detail": err.Error()})
+			return
+		}
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库查询失败", "detail": err.Error()})
+		return
+	}
+	f := file.File{
+		Name:       fileHeader.Filename,
+		Hash:       hashStr,
+		Type:       "file",
+		ParentID:   parentID,
+		OwnerID:    claims.UserID,
+		UploadTime: time.Now(),
+	}
+	if err := db.Create(&f).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库写入失败", "detail": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": f.ID, "name": f.Name, "size": fileContent.Size})
+}
+
+// @Summary 下载文件
+// @Description 下载指定文件
+// @Tags 文件模块
+// @Accept json
+// @Produce application/octet-stream
+// @Param Authorization header string true "Bearer Token"
+// @Param id path string true "文件ID"
+// @Success 200 {file} file
+// @Failure 401 {object} map[string]interface{}
+// @Failure 403 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/download/{id} [get]
+func FileDownloadHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	idStr := c.Param("id")
+	var f file.File
+	err = db.First(&f, "id = ?", idStr).Error
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+		return
+	}
+	if f.OwnerID != claims.UserID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权限下载该文件"})
+		return
+	}
+	if f.Type != "file" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "只能下载文件类型"})
+		return
+	}
+	filePath := "uploads/" + f.Hash
+	c.FileAttachment(filePath, f.Name)
+}
+
+// @Summary 删除文件
+// @Description 删除指定文件
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer Token"
+// @Param id path string true "文件ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 403 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/{id} [delete]
+func FileDeleteHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	idStr := c.Param("id")
+	err = file.DeleteFile(db, idStr, claims.UserID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+			return
+		}
+		if err == file.ErrNoPermission {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权限删除该文件"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+}
+
+// @Summary 重命名文件
+// @Description 重命名指定文件
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer Token"
+// @Param id path string true "文件ID"
+// @Param data body file.RenameFileRequest true "新文件名"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 403 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/{id}/rename [put]
+func FileRenameHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	idStr := c.Param("id")
+	var req file.RenameFileRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.NewName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "新文件名不能为空"})
+		return
+	}
+	err = file.RenameFile(db, idStr, claims.UserID, req.NewName)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+			return
+		}
+		if err == file.ErrNoPermission {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权限重命名该文件"})
+			return
+		}
+		if err == file.ErrNameExists {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "同目录下已存在同名文件"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "重命名成功"})
+}
+
+// @Summary 移动文件/文件夹
+// @Description 移动指定文件/文件夹到新目录
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer Token"
+// @Param id path string true "文件ID"
+// @Param data body file.MoveFileRequest true "新父目录ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 403 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/{id}/move [put]
+func FileMoveHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	idStr := c.Param("id")
+	var req file.MoveFileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "新父目录ID不能为空"})
+		return
+	}
+	err = file.MoveFile(db, idStr, claims.UserID, req.NewParentID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+			return
+		}
+		if err == file.ErrNoPermission {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权限移动该文件"})
+			return
+		}
+		if err == file.ErrNameExists {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "目标目录下已存在同名文件/文件夹"})
+			return
+		}
+		if err == file.ErrMoveToSelfOrChild {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "不能移动到自身或子目录下"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "移动成功"})
+}

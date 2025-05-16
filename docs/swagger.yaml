@@ -37,6 +37,13 @@ definitions:
       new_name:
         type: string
     type: object
+  handler.CreateFolderRequest:
+    properties:
+      name:
+        type: string
+      parent_id:
+        type: string
+    type: object
   user.LoginRequest:
     properties:
       password:
@@ -371,6 +378,49 @@ paths:
             additionalProperties: true
             type: object
       summary: 上传文件
+      tags:
+      - 文件模块
+  /folders:
+    post:
+      consumes:
+      - application/json
+      description: 在指定目录下新建文件夹
+      parameters:
+      - description: Bearer Token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: 文件夹信息
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/handler.CreateFolderRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 新建文件夹
       tags:
       - 文件模块
   /user/login:
