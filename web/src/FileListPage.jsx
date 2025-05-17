@@ -616,6 +616,25 @@ const FileListPage = () => {
         cancelText="取消"
         footer={shareModal.link ? [
           <Button key="copy" icon={<CopyOutlined />} onClick={() => {navigator.clipboard.writeText(getShareCopyText()); message.success('已复制');}}>复制链接</Button>,
+          <Button key="cancelShare" danger onClick={async () => {
+            Modal.confirm({
+              title: '确定要取消该分享吗？',
+              onOk: async () => {
+                const userToken = localStorage.getItem('token');
+                try {
+                  await axios.delete('/api/share', {
+                    headers: { Authorization: 'Bearer ' + userToken },
+                    params: { token: shareModal.link.split('/').pop() }
+                  });
+                  message.success('取消分享成功');
+                  setShareModal({ visible: false, file: null, expire: 24, link: '', type: 'public', accessCode: '' });
+                  fetchFiles();
+                } catch (e) {
+                  message.error(e.response?.data?.error || '取消分享失败');
+                }
+              }
+            });
+          }}>取消分享</Button>,
           <Button key="close" type="primary" onClick={() => setShareModal({ visible: false, file: null, expire: 24, link: '', type: 'public', accessCode: '' })}>关闭</Button>
         ] : undefined}
       >

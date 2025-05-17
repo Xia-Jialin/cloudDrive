@@ -511,6 +511,56 @@ paths:
       summary: 新建文件夹
       tags:
       - 文件模块
+  /share:
+    delete:
+      consumes:
+      - application/json
+      description: 取消指定的分享链接（token或resource_id），仅分享创建者可操作
+      parameters:
+      - description: Bearer Token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: 分享Token
+        in: path
+        name: token
+        type: string
+      - description: 资源ID
+        in: query
+        name: resource_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 取消分享
+      tags:
+      - 分享
   /share/{token}:
     get:
       consumes:
