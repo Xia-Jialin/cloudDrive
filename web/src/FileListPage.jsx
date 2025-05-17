@@ -3,6 +3,7 @@ import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb, M
 import { UploadOutlined, DownloadOutlined, DeleteOutlined, FolderOpenOutlined, FileOutlined, HomeOutlined, MoreOutlined, CopyOutlined, LinkOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import dayjs from 'dayjs';
+import FilePreviewModal from './FilePreviewModal';
 
 const { Search } = Input;
 
@@ -22,6 +23,8 @@ const FileListPage = () => {
   const [folderOptions, setFolderOptions] = useState([]);
   const [dragOverFolderId, setDragOverFolderId] = useState(null); // 拖拽高亮目标文件夹
   const [shareModal, setShareModal] = useState({ visible: false, file: null, expire: 24, link: '', type: 'public', accessCode: '' });
+  const [previewFile, setPreviewFile] = useState(null);
+  const [previewVisible, setPreviewVisible] = useState(false);
 
   // 获取当前目录下的文件和文件夹
   const fetchFiles = async () => {
@@ -479,6 +482,23 @@ const FileListPage = () => {
         const moreMenu = (
           <Menu>
             {file.type === 'file' && (
+              <Menu.Item key="preview" onClick={() => {
+                // 推断MIME类型
+                let mime = '';
+                const ext = file.name.split('.').pop().toLowerCase();
+                if (["jpg","jpeg","png","gif","bmp","webp","svg"].includes(ext)) mime = `image/${ext==="jpg"?"jpeg":ext}`;
+                else if (ext === 'pdf') mime = 'application/pdf';
+                else if (["mp4","webm","ogg"].includes(ext)) mime = `video/${ext}`;
+                else if (["mp3","wav","aac","flac"].includes(ext)) mime = `audio/${ext}`;
+                else if (["txt","md","log","json","js","ts","css","html","xml","csv"].includes(ext)) mime = 'text/plain';
+                else mime = '';
+                setPreviewFile({ ...file, type: mime });
+                setPreviewVisible(true);
+              }}>
+                预览
+              </Menu.Item>
+            )}
+            {file.type === 'file' && (
               <Menu.Item key="download" onClick={() => handleDownload(file)} icon={<DownloadOutlined />}>
                 下载
               </Menu.Item>
@@ -672,6 +692,11 @@ const FileListPage = () => {
           )}
         </div>
       </Modal>
+      <FilePreviewModal
+        file={previewFile}
+        visible={previewVisible}
+        onClose={() => setPreviewVisible(false)}
+      />
     </div>
   );
 };

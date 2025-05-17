@@ -393,6 +393,52 @@ paths:
       summary: 下载文件
       tags:
       - 文件模块
+  /files/preview/{id}:
+    get:
+      consumes:
+      - application/json
+      description: 在线预览指定文件，仅支持已登录用户
+      parameters:
+      - description: Bearer Token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: 文件ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 文件在线预览
+      tags:
+      - 文件模块
   /files/search:
     get:
       consumes:

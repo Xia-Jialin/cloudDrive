@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"strconv"
@@ -443,4 +444,68 @@ func FileSearchHandler(c *gin.Context) {
 		filesWithSize = append(filesWithSize, fileMap)
 	}
 	c.JSON(http.StatusOK, gin.H{"files": filesWithSize, "total": resp.Total})
+}
+
+// @Summary 文件在线预览
+// @Description 在线预览指定文件，仅支持已登录用户
+// @Tags 文件模块
+// @Accept json
+// @Produce octet-stream
+// @Param Authorization header string true "Bearer Token"
+// @Param id path string true "文件ID"
+// @Success 200 {file} file
+// @Failure 401 {object} map[string]interface{}
+// @Failure 403 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/preview/{id} [get]
+func FilePreviewHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	idStr := c.Param("id")
+	var f file.File
+	err = db.First(&f, "id = ?", idStr).Error
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+		return
+	}
+	if f.OwnerID != claims.UserID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权限预览该文件"})
+		return
+	}
+	if f.Type != "file" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "只能预览文件类型"})
+		return
+	}
+	filePath := "uploads/" + f.Hash
+	ext := ""
+	if len(f.Name) > 0 {
+		dot := len(f.Name) - 1
+		for ; dot >= 0 && f.Name[dot] != '.'; dot-- {
+		}
+		if dot >= 0 {
+			ext = f.Name[dot:]
+		}
+	}
+	contentType := "application/octet-stream"
+	if ext != "" {
+		contentType = mime.TypeByExtension(ext)
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+	}
+	c.Header("Content-Type", contentType)
+	c.File(filePath)
 }

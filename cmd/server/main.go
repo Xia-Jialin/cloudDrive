@@ -62,6 +62,7 @@ func main() {
 	r.GET("/api/share/private", handler.GetPrivateShareHandler)
 	r.DELETE("/api/share", handler.CancelShareHandler)
 	r.GET("/api/files/search", handler.FileSearchHandler)
+	r.GET("/api/files/preview/:id", handler.FilePreviewHandler)
 
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
