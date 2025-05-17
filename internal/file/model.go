@@ -164,6 +164,7 @@ type Share struct {
 	ResourceID string    `gorm:"not null" json:"resource_id"`
 	ShareType  string    `gorm:"size:20;not null" json:"share_type"`
 	Token      string    `gorm:"size:64;unique;not null" json:"token"`
+	AccessCode string    `gorm:"size:16" json:"access_code"` // 私有分享访问码
 	ExpireAt   time.Time `gorm:"not null" json:"expire_at"`
 	CreatorID  uint      `gorm:"not null" json:"creator_id"`
 	CreatedAt  time.Time `json:"created_at"`

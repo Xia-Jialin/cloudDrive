@@ -56,8 +56,10 @@ func main() {
 	r.PUT("/api/files/:id/move", handler.FileMoveHandler)
 	r.POST("/api/share/public", handler.CreatePublicShareHandler)
 	r.GET("/api/share/public", handler.GetPublicShareHandler)
-	r.GET("/api/share/:token", handler.AccessPublicShareHandler)
+	r.GET("/api/share/:token", handler.AccessShareHandler)
 	r.GET("/api/share/download/:token", handler.ShareDownloadHandler)
+	r.POST("/api/share/private", handler.CreatePrivateShareHandler)
+	r.GET("/api/share/private", handler.GetPrivateShareHandler)
 
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 

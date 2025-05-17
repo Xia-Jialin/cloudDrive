@@ -44,6 +44,60 @@ definitions:
       parent_id:
         type: string
     type: object
+  handler.PrivateShareRequest:
+    properties:
+      expire_hours:
+        maximum: 168
+        minimum: 1
+        type: integer
+      resource_id:
+        type: string
+    required:
+    - expire_hours
+    - resource_id
+    type: object
+  handler.PrivateShareResponse:
+    properties:
+      access_code:
+        type: string
+      expire_at:
+        type: integer
+      share_link:
+        type: string
+    type: object
+  handler.PublicShareAccessResponse:
+    properties:
+      expire_at:
+        type: integer
+      name:
+        type: string
+      owner_id:
+        type: integer
+      resource_id:
+        type: string
+      type:
+        type: string
+    type: object
+  handler.PublicShareRequest:
+    properties:
+      expire_hours:
+        description: 1~168小时
+        maximum: 168
+        minimum: 1
+        type: integer
+      resource_id:
+        type: string
+    required:
+    - expire_hours
+    - resource_id
+    type: object
+  handler.PublicShareResponse:
+    properties:
+      expire_at:
+        type: integer
+      share_link:
+        type: string
+    type: object
   user.LoginRequest:
     properties:
       password:
@@ -423,6 +477,210 @@ paths:
       summary: 新建文件夹
       tags:
       - 文件模块
+  /share/{token}:
+    get:
+      consumes:
+      - application/json
+      description: 访问公开或私有分享链接，私有需access_code
+      parameters:
+      - description: 分享Token
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: 访问码(私有分享)
+        in: query
+        name: access_code
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.PublicShareAccessResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "410":
+          description: Gone
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 访问分享链接
+      tags:
+      - 分享
+  /share/download/{token}:
+    get:
+      consumes:
+      - application/json
+      description: 通过分享链接下载文件，私有需access_code
+      parameters:
+      - description: 分享Token
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: 访问码(私有分享)
+        in: query
+        name: access_code
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "410":
+          description: Gone
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 分享文件下载
+      tags:
+      - 分享
+  /share/private:
+    get:
+      consumes:
+      - application/json
+      description: 查询指定文件的未过期私有分享链接
+      parameters:
+      - description: 资源ID
+        in: query
+        name: resource_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.PrivateShareResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 查询已有未过期的私有分享
+      tags:
+      - 分享
+    post:
+      consumes:
+      - application/json
+      description: 创建一个私有分享链接，需访问码访问
+      parameters:
+      - description: 私有分享参数
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/handler.PrivateShareRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.PrivateShareResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 创建私有分享链接
+      tags:
+      - 分享
+  /share/public:
+    get:
+      consumes:
+      - application/json
+      description: 查询指定文件的未过期公开分享链接
+      parameters:
+      - description: 资源ID
+        in: query
+        name: resource_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.PublicShareResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 查询已有未过期的公开分享
+      tags:
+      - 分享
+    post:
+      consumes:
+      - application/json
+      description: 创建一个公开分享链接，任何人可访问
+      parameters:
+      - description: 公开分享参数
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/handler.PublicShareRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.PublicShareResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 创建公开分享链接
+      tags:
+      - 分享
   /user/login:
     post:
       consumes:

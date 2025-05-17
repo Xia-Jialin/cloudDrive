@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb, Modal, Select, Dropdown, Menu } from 'antd';
+import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb, Modal, Select, Dropdown, Menu, Radio } from 'antd';
 import { UploadOutlined, DownloadOutlined, DeleteOutlined, FolderOpenOutlined, FileOutlined, HomeOutlined, MoreOutlined, CopyOutlined, LinkOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
@@ -20,7 +20,7 @@ const FileListPage = () => {
   const [moveModal, setMoveModal] = useState({ visible: false, file: null, target: '' });
   const [folderOptions, setFolderOptions] = useState([]);
   const [dragOverFolderId, setDragOverFolderId] = useState(null); // 拖拽高亮目标文件夹
-  const [shareModal, setShareModal] = useState({ visible: false, file: null, expire: 24, link: '' });
+  const [shareModal, setShareModal] = useState({ visible: false, file: null, expire: 24, link: '', type: 'public', accessCode: '' });
 
   // 获取当前目录下的文件和文件夹
   const fetchFiles = async () => {
@@ -284,44 +284,85 @@ const FileListPage = () => {
   };
 
   const handleShare = async (file) => {
+    let frontendOrigin = window.location.origin;
+    if (frontendOrigin.includes(':8080')) {
+      frontendOrigin = frontendOrigin.replace(':8080', ':5173');
+    }
+    // 先查私有
+    try {
+      const res = await axios.get('/api/share/private', { params: { resource_id: file.id } });
+      const token = res.data.share_link.split('/').pop();
+      setShareModal({
+        visible: true,
+        file,
+        expire: 24,
+        link: `${frontendOrigin}/share/${token}`,
+        type: 'private',
+        accessCode: res.data.access_code || '',
+      });
+      message.info('已存在私有分享，直接展示');
+      return;
+    } catch {}
+    // 再查公开
     try {
       const res = await axios.get('/api/share/public', { params: { resource_id: file.id } });
-      // 自动适配前端端口
-      let frontendOrigin = window.location.origin;
-      if (frontendOrigin.includes(':8080')) {
-        frontendOrigin = frontendOrigin.replace(':8080', ':5173');
-      }
       const token = res.data.share_link.split('/').pop();
-      setShareModal({ visible: true, file, expire: 24, link: `${frontendOrigin}/share/${token}` });
-      message.info('已存在分享链接，直接展示');
-    } catch (e) {
-      // 未找到分享链接，弹出生成界面
-      setShareModal({ visible: true, file, expire: 24, link: '' });
-    }
+      setShareModal({
+        visible: true,
+        file,
+        expire: 24,
+        link: `${frontendOrigin}/share/${token}`,
+        type: 'public',
+        accessCode: '',
+      });
+      message.info('已存在公开分享，直接展示');
+      return;
+    } catch {}
+    // 否则新建
+    setShareModal({ visible: true, file, expire: 24, link: '', type: 'public', accessCode: '' });
   };
 
   const doShare = async () => {
-    const { file, expire } = shareModal;
+    const { file, expire, type } = shareModal;
     if (!expire || expire < 1 || expire > 168) {
       message.warning('有效期需为1~168小时');
       return;
     }
     try {
-      const res = await axios.post('/api/share/public', {
-        resource_id: file.id,
-        expire_hours: expire,
-      });
-      // 自动适配前端端口
+      let res;
+      if (type === 'public') {
+        res = await axios.post('/api/share/public', {
+          resource_id: file.id,
+          expire_hours: expire,
+        });
+      } else {
+        res = await axios.post('/api/share/private', {
+          resource_id: file.id,
+          expire_hours: expire,
+        });
+      }
       let frontendOrigin = window.location.origin;
       if (frontendOrigin.includes(':8080')) {
         frontendOrigin = frontendOrigin.replace(':8080', ':5173');
       }
       const token = res.data.share_link.split('/').pop();
-      setShareModal(s => ({ ...s, link: `${frontendOrigin}/share/${token}` }));
+      setShareModal(s => ({
+        ...s,
+        link: `${frontendOrigin}/share/${token}`,
+        accessCode: res.data.access_code || '',
+      }));
       message.success('分享链接已生成');
     } catch (e) {
       message.error(e.response?.data?.error || '分享失败');
     }
+  };
+
+  const getShareCopyText = () => {
+    if (!shareModal.link) return '';
+    if (shareModal.accessCode) {
+      return `分享链接：${shareModal.link}\n访问码：${shareModal.accessCode}`;
+    }
+    return `分享链接：${shareModal.link}`;
   };
 
   const columns = [
@@ -571,15 +612,26 @@ const FileListPage = () => {
         title="生成分享链接"
         open={shareModal.visible}
         onOk={doShare}
-        onCancel={() => setShareModal({ visible: false, file: null, expire: 24, link: '' })}
+        onCancel={() => setShareModal({ visible: false, file: null, expire: 24, link: '', type: 'public', accessCode: '' })}
         okText={shareModal.link ? '关闭' : '生成'}
         cancelText="取消"
         footer={shareModal.link ? [
-          <Button key="copy" icon={<CopyOutlined />} onClick={() => {navigator.clipboard.writeText(shareModal.link); message.success('已复制');}}>复制链接</Button>,
-          <Button key="close" type="primary" onClick={() => setShareModal({ visible: false, file: null, expire: 24, link: '' })}>关闭</Button>
+          <Button key="copy" icon={<CopyOutlined />} onClick={() => {navigator.clipboard.writeText(getShareCopyText()); message.success('已复制');}}>复制链接</Button>,
+          <Button key="close" type="primary" onClick={() => setShareModal({ visible: false, file: null, expire: 24, link: '', type: 'public', accessCode: '' })}>关闭</Button>
         ] : undefined}
       >
         <div>
+          <div style={{ marginBottom: 12 }}>
+            <Radio.Group
+              value={shareModal.type}
+              onChange={e => setShareModal(s => ({ ...s, type: e.target.value }))}
+              disabled={!!shareModal.link}
+              style={{ marginBottom: 8 }}
+            >
+              <Radio value="public">公开分享</Radio>
+              <Radio value="private">私有分享（需访问码）</Radio>
+            </Radio.Group>
+          </div>
           <div style={{ marginBottom: 12 }}>
             有效期（小时，1~168）：
             <Input
@@ -593,8 +645,11 @@ const FileListPage = () => {
             />
           </div>
           {shareModal.link && (
-            <div style={{ wordBreak: 'break-all', background: '#f6ffed', padding: 8, borderRadius: 4 }}>
+            <div style={{ wordBreak: 'break-all', background: '#f6ffed', padding: 8, borderRadius: 4, marginBottom: 8 }}>
               <LinkOutlined /> 分享链接：<a href={shareModal.link} target="_blank" rel="noopener noreferrer">{shareModal.link}</a>
+              {shareModal.accessCode && (
+                <div style={{ marginTop: 8 }}><b>访问码：</b><span style={{ fontSize: 18, letterSpacing: 2 }}>{shareModal.accessCode}</span></div>
+              )}
             </div>
           )}
         </div>
