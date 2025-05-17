@@ -174,6 +174,16 @@ func FileUploadHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库写入失败", "detail": err.Error()})
 		return
 	}
+	var u user.User
+	db.First(&u, claims.UserID)
+	if u.StorageUsed+fileContent.Size > u.StorageLimit {
+		if err := db.Delete(&f).Error; err == nil {
+			_ = os.Remove("uploads/" + hashStr)
+		}
+		c.JSON(http.StatusForbidden, gin.H{"error": "存储空间不足"})
+		return
+	}
+	db.Model(&u).UpdateColumn("storage_used", gorm.Expr("storage_used + ?", fileContent.Size))
 	c.JSON(http.StatusOK, gin.H{"id": f.ID, "name": f.Name, "size": fileContent.Size})
 }
 

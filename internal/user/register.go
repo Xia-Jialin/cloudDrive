@@ -73,9 +73,11 @@ func Register(db *gorm.DB, req RegisterRequest) (*RegisterResponse, error) {
 		return nil, errors.New("密码加密失败")
 	}
 	user := User{
-		Username: req.Username,
-		Password: string(hash),
-		Nickname: GenerateNickname(),
+		Username:     req.Username,
+		Password:     string(hash),
+		Nickname:     GenerateNickname(),
+		StorageLimit: 1073741824, // 1G
+		StorageUsed:  0,
 	}
 	if err := db.Create(&user).Error; err != nil {
 		log.Printf("[ERROR] 用户创建失败: %v", err)

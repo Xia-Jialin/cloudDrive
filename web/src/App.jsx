@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 import FileListPage from './FileListPage';
@@ -99,7 +99,32 @@ function Login({ onLogin, onSwitch }) {
   );
 }
 
+function StorageInfo({ token }) {
+  const [storage, setStorage] = useState({ storage_used: 0, storage_limit: 1 });
+  useEffect(() => {
+    if (!token) return;
+    axios.get('/api/user/storage', {
+      headers: { Authorization: 'Bearer ' + token }
+    }).then(res => setStorage(res.data)).catch(() => {});
+  }, [token]);
+  const percent = Math.round((storage.storage_used / storage.storage_limit) * 100);
+  function formatSize(bytes) {
+    if (bytes > 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    if (bytes > 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+    if (bytes > 1024) return (bytes / 1024).toFixed(2) + ' KB';
+    return bytes + ' B';
+  }
+  return (
+    <div className="user-info">
+      <span>空间使用：</span>
+      <progress value={percent} max="100" style={{ width: 160, verticalAlign: 'middle' }} />
+      <span style={{ marginLeft: 8 }}>{formatSize(storage.storage_used)} / {formatSize(storage.storage_limit)} ({percent}%)</span>
+    </div>
+  );
+}
+
 function Home({ user, onLogout }) {
+  const token = localStorage.getItem('token');
   return (
     <div>
       <div style={{
@@ -108,6 +133,7 @@ function Home({ user, onLogout }) {
       }}>
         <div>
           欢迎，{user.nickname || user.username}（{user.role}）
+          <StorageInfo token={token} />
         </div>
         <button className="logout-btn" onClick={onLogout}>退出登录</button>
       </div>

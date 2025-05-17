@@ -46,6 +46,7 @@ func main() {
 
 	r.POST("/api/user/register", handler.RegisterHandler)
 	r.POST("/api/user/login", handler.LoginHandler)
+	r.GET("/api/user/storage", handler.UserStorageHandler)
 
 	r.GET("/api/files", handler.FileListHandler)
 	r.POST("/api/files/upload", handler.FileUploadHandler)
