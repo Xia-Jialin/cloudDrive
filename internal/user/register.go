@@ -72,42 +72,51 @@ func Register(db *gorm.DB, req RegisterRequest) (*RegisterResponse, error) {
 		log.Printf("[ERROR] 密码加密失败: %v", err)
 		return nil, errors.New("密码加密失败")
 	}
-	user := User{
-		Username:     req.Username,
-		Password:     string(hash),
-		Nickname:     GenerateNickname(),
-		StorageLimit: 1073741824, // 1G
-		StorageUsed:  0,
-	}
-	if err := db.Create(&user).Error; err != nil {
-		log.Printf("[ERROR] 用户创建失败: %v", err)
+
+	var resp *RegisterResponse
+	err = db.Transaction(func(tx *gorm.DB) error {
+		user := User{
+			Username:     req.Username,
+			Password:     string(hash),
+			Nickname:     GenerateNickname(),
+			StorageLimit: 1073741824, // 1G
+			StorageUsed:  0,
+		}
+		if err := tx.Create(&user).Error; err != nil {
+			log.Printf("[ERROR] 用户创建失败: %v", err)
+			return err
+		}
+
+		// 创建根目录文件夹
+		rootFolder := &file.File{
+			Name:       "根目录",
+			Type:       "folder",
+			ParentID:   "", // 根目录的ParentID为空
+			OwnerID:    user.ID,
+			UploadTime: user.CreatedAt,
+		}
+		if err := tx.Create(rootFolder).Error; err != nil {
+			log.Printf("[ERROR] 根目录创建失败: %v", err)
+			return err
+		}
+
+		// 记录用户根目录映射
+		userRoot := &file.UserRoot{
+			UserID:    user.ID,
+			RootID:    rootFolder.ID,
+			CreatedAt: user.CreatedAt,
+		}
+		if err := tx.Create(userRoot).Error; err != nil {
+			log.Printf("[ERROR] UserRoot创建失败: %v", err)
+			return err
+		}
+
+		log.Printf("[DEBUG] 用户注册成功: id=%d, username=%s", user.ID, user.Username)
+		resp = &RegisterResponse{ID: user.ID}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-
-	// 创建根目录文件夹
-	rootFolder := &file.File{
-		Name:       "根目录",
-		Type:       "folder",
-		ParentID:   "", // 根目录的ParentID为空
-		OwnerID:    user.ID,
-		UploadTime: user.CreatedAt,
-	}
-	if err := db.Create(rootFolder).Error; err != nil {
-		log.Printf("[ERROR] 根目录创建失败: %v", err)
-		return nil, err
-	}
-
-	// 记录用户根目录映射
-	userRoot := &file.UserRoot{
-		UserID:    user.ID,
-		RootID:    rootFolder.ID,
-		CreatedAt: user.CreatedAt,
-	}
-	if err := db.Create(userRoot).Error; err != nil {
-		log.Printf("[ERROR] UserRoot创建失败: %v", err)
-		return nil, err
-	}
-
-	log.Printf("[DEBUG] 用户注册成功: id=%d, username=%s", user.ID, user.Username)
-	return &RegisterResponse{ID: user.ID}, nil
+	return resp, nil
 }
