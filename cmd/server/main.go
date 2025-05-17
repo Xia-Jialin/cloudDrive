@@ -4,11 +4,14 @@ import (
 	"cloudDrive/internal/file"
 	"cloudDrive/internal/handler"
 	"cloudDrive/internal/user"
+	"flag"
+	"fmt"
 	"log"
 
 	_ "cloudDrive/docs"
 
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"gorm.io/driver/mysql"
@@ -24,7 +27,32 @@ import (
 var db *gorm.DB
 
 func main() {
-	dsn := "root:123456@tcp(127.0.0.1:3306)/clouddrive?charset=utf8mb4&parseTime=True&loc=Local"
+	// 支持通过命令行参数指定配置文件路径
+	configPath := flag.String("config", "./configs/config.yaml", "配置文件路径")
+	flag.Parse()
+
+	viper.SetConfigFile(*configPath)
+	if err := viper.ReadInConfig(); err != nil {
+		log.Fatalf("读取配置文件失败: %v", err)
+	}
+
+	dbUser := viper.GetString("database.user")
+	dbPassword := viper.GetString("database.password")
+	dbHost := viper.GetString("database.host")
+	dbPort := viper.GetInt("database.port")
+	dbName := viper.GetString("database.name")
+	dbCharset := viper.GetString("database.charset")
+	parseTime := viper.GetBool("database.parseTime")
+	loc := viper.GetString("database.loc")
+
+	parseTimeStr := "False"
+	if parseTime {
+		parseTimeStr = "True"
+	}
+
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=%s&loc=%s",
+		dbUser, dbPassword, dbHost, dbPort, dbName, dbCharset, parseTimeStr, loc)
+
 	var err error
 	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
