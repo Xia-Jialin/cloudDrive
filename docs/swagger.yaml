@@ -393,6 +393,40 @@ paths:
       summary: 下载文件
       tags:
       - 文件模块
+  /files/search:
+    get:
+      consumes:
+      - application/json
+      description: 按文件名模糊搜索文件
+      parameters:
+      - description: Bearer Token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: 文件名
+        in: query
+        name: name
+        required: true
+        type: string
+      - description: 页码，默认1
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量，默认10
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/file.ListFilesResponse'
+      summary: 搜索文件
+      tags:
+      - 文件模块
   /files/upload:
     post:
       consumes:

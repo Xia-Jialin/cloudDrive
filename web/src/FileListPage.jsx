@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb, Modal, Select, Dropdown, Menu, Radio } from 'antd';
+import { Table, Button, Input, Space, Upload, message, Popconfirm, Breadcrumb, Modal, Select, Dropdown, Menu, Radio, DatePicker } from 'antd';
 import { UploadOutlined, DownloadOutlined, DeleteOutlined, FolderOpenOutlined, FileOutlined, HomeOutlined, MoreOutlined, CopyOutlined, LinkOutlined } from '@ant-design/icons';
 import axios from 'axios';
+import dayjs from 'dayjs';
 
 const { Search } = Input;
 
@@ -27,16 +28,13 @@ const FileListPage = () => {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.get('/api/files', {
+      let url = search ? '/api/files/search' : '/api/files';
+      const params = search
+        ? { name: search, page, page_size: pageSize }
+        : { parent_id: currentPath.length > 0 ? currentPath[currentPath.length - 1] : "", page, page_size: pageSize, order_by: 'upload_time', order: 'desc' };
+      const res = await axios.get(url, {
         headers: { Authorization: 'Bearer ' + token },
-        params: {
-          parent_id: currentPath.length > 0 ? currentPath[currentPath.length - 1] : "",
-          page,
-          page_size: pageSize,
-          order_by: 'upload_time',
-          order: 'desc',
-          // 可加 search 字段，后端支持时
-        }
+        params
       });
       setFiles(res.data.files.map(f => ({
         ...f,
@@ -531,6 +529,7 @@ const FileListPage = () => {
           onSearch={setSearch}
           enterButton
           allowClear
+          style={{ width: 200 }}
         />
         <Button onClick={handleCreateFolder} type="default">
           新建文件夹

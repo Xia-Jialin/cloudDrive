@@ -383,3 +383,64 @@ func FileMoveHandler(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "移动成功"})
 }
+
+// @Summary 搜索文件
+// @Description 按文件名模糊搜索文件
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer Token"
+// @Param name query string true "文件名"
+// @Param page query int false "页码，默认1"
+// @Param page_size query int false "每页数量，默认10"
+// @Success 200 {object} file.ListFilesResponse
+// @Router /files/search [get]
+func FileSearchHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	tokenStr := c.GetHeader("Authorization")
+	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
+		tokenStr = tokenStr[7:]
+	}
+	claims := user.Claims{}
+	secret := "cloudDriveSecret"
+	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
+		return
+	}
+	name := c.Query("name")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	resp, err := file.ListFiles(db, file.ListFilesRequest{
+		OwnerID:  claims.UserID,
+		Name:     name,
+		Page:     page,
+		PageSize: pageSize,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	filesWithSize := make([]gin.H, 0, len(resp.Files))
+	for _, f := range resp.Files {
+		fileMap := gin.H{
+			"id":          f.ID,
+			"name":        f.Name,
+			"type":        f.Type,
+			"parent_id":   f.ParentID,
+			"owner_id":    f.OwnerID,
+			"upload_time": f.UploadTime,
+		}
+		if f.Type == "file" {
+			var fc file.FileContent
+			db.First(&fc, "hash = ?", f.Hash)
+			fileMap["size"] = fc.Size
+		} else {
+			fileMap["size"] = nil
+		}
+		filesWithSize = append(filesWithSize, fileMap)
+	}
+	c.JSON(http.StatusOK, gin.H{"files": filesWithSize, "total": resp.Total})
+}

@@ -5,12 +5,15 @@ import (
 )
 
 type ListFilesRequest struct {
-	ParentID string // 指定目录
-	OwnerID  uint   // 当前用户
-	Page     int    // 页码
-	PageSize int    // 每页数量
-	OrderBy  string // 排序字段
-	Order    string // asc/desc
+	ParentID   string // 指定目录
+	OwnerID    uint   // 当前用户
+	Page       int    // 页码
+	PageSize   int    // 每页数量
+	OrderBy    string // 排序字段
+	Order      string // asc/desc
+	Name       string // 文件名
+	Type       string // 文件类型
+	UploadTime string // 上传时间
 }
 
 type ListFilesResponse struct {
@@ -27,17 +30,31 @@ func ListFiles(db *gorm.DB, req ListFilesRequest) (*ListFilesResponse, error) {
 	}
 
 	parentID := req.ParentID
-	if parentID == "" {
-		// 查询用户根目录ID
-		var userRoot UserRoot
-		err := db.First(&userRoot, "user_id = ?", req.OwnerID).Error
-		if err != nil {
-			return nil, err
+	var query *gorm.DB
+	if parentID == "" && req.Name != "" {
+		// 全局搜索
+		query = db.Model(&File{}).Where("owner_id = ?", req.OwnerID)
+	} else {
+		if parentID == "" {
+			// 查询用户根目录ID
+			var userRoot UserRoot
+			err := db.First(&userRoot, "user_id = ?", req.OwnerID).Error
+			if err != nil {
+				return nil, err
+			}
+			parentID = userRoot.RootID
 		}
-		parentID = userRoot.RootID
+		query = db.Model(&File{}).Where("parent_id = ?", parentID)
 	}
-
-	query := db.Model(&File{}).Where("parent_id = ?", parentID)
+	if req.Name != "" {
+		query = query.Where("name LIKE ?", "%"+req.Name+"%")
+	}
+	if req.Type != "" {
+		query = query.Where("type = ?", req.Type)
+	}
+	if req.UploadTime != "" {
+		query = query.Where("DATE(upload_time) = ?", req.UploadTime)
+	}
 	if req.OrderBy != "" {
 		order := req.OrderBy
 		if req.Order == "desc" {
