@@ -8,7 +8,11 @@ import (
 
 	"math/rand"
 
+	"context"
+	"encoding/json"
+
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -72,6 +76,8 @@ func genAccessCode() string {
 // @Router /share/public [post]
 func CreatePublicShareHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
 	var req PublicShareRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
@@ -109,6 +115,21 @@ func CreatePublicShareHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建分享失败"})
 		return
 	}
+	// 写入缓存
+	cacheKey := "share:" + token
+	resp := PublicShareAccessResponse{
+		ResourceID: f.ID,
+		Name:       f.Name,
+		Type:       f.Type,
+		OwnerID:    f.OwnerID,
+		ExpireAt:   expireAt.Unix(),
+	}
+	expire := time.Until(expireAt)
+	if expire > 0 {
+		if data, err := json.Marshal(resp); err == nil {
+			rdb.Set(ctx, cacheKey, data, expire)
+		}
+	}
 	// 返回分享链接
 	shareLink := c.Request.Host + "/api/share/" + token
 	c.JSON(http.StatusOK, PublicShareResponse{
@@ -120,7 +141,21 @@ func CreatePublicShareHandler(c *gin.Context) {
 // AccessPublicShareHandler 公开分享访问接口
 func AccessPublicShareHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
 	token := c.Param("token")
+	cacheKey := "share:" + token
+
+	// 1. 优先查redis
+	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil && val != "" {
+		var resp PublicShareAccessResponse
+		if err := json.Unmarshal([]byte(val), &resp); err == nil {
+			c.JSON(http.StatusOK, resp)
+			return
+		}
+	}
+
+	// 2. 查数据库
 	var share file.Share
 	if err := db.Where("token = ? AND share_type = ?", token, "public").First(&share).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "分享链接不存在"})
@@ -136,13 +171,21 @@ func AccessPublicShareHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "资源不存在"})
 		return
 	}
-	c.JSON(http.StatusOK, PublicShareAccessResponse{
+	resp := PublicShareAccessResponse{
 		ResourceID: f.ID,
 		Name:       f.Name,
 		Type:       f.Type,
 		OwnerID:    f.OwnerID,
 		ExpireAt:   share.ExpireAt.Unix(),
-	})
+	}
+	// 3. 写入redis，过期时间与分享剩余时间一致
+	expire := time.Until(share.ExpireAt)
+	if expire > 0 {
+		if data, err := json.Marshal(resp); err == nil {
+			rdb.Set(ctx, cacheKey, data, expire)
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // @Summary 分享文件下载
@@ -234,6 +277,8 @@ func GetPublicShareHandler(c *gin.Context) {
 // @Router /share/private [post]
 func CreatePrivateShareHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
 	var req PrivateShareRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
@@ -263,6 +308,21 @@ func CreatePrivateShareHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建分享失败"})
 		return
 	}
+	// 写入缓存（不含access_code）
+	cacheKey := "share:" + token
+	resp := PublicShareAccessResponse{
+		ResourceID: f.ID,
+		Name:       f.Name,
+		Type:       f.Type,
+		OwnerID:    f.OwnerID,
+		ExpireAt:   expireAt.Unix(),
+	}
+	expire := time.Until(expireAt)
+	if expire > 0 {
+		if data, err := json.Marshal(resp); err == nil {
+			rdb.Set(ctx, cacheKey, data, expire)
+		}
+	}
 	shareLink := c.Request.Host + "/api/share/" + token
 	c.JSON(http.StatusOK, PrivateShareResponse{
 		ShareLink:  shareLink,
@@ -286,7 +346,36 @@ func CreatePrivateShareHandler(c *gin.Context) {
 // @Router /share/{token} [get]
 func AccessShareHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
 	token := c.Param("token")
+	cacheKey := "share:" + token
+
+	// 1. 优先查redis（仅公开分享和私有分享access_code校验通过后可缓存）
+	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil && val != "" {
+		var resp PublicShareAccessResponse
+		if err := json.Unmarshal([]byte(val), &resp); err == nil {
+			// 私有分享需校验access_code
+			var share file.Share
+			if err := db.Where("token = ?", token).First(&share).Error; err == nil {
+				if share.ShareType == "private" {
+					accessCode := c.Query("access_code")
+					if accessCode == "" {
+						c.JSON(401, gin.H{"error": "需要访问码"})
+						return
+					}
+					if accessCode != share.AccessCode {
+						c.JSON(403, gin.H{"error": "访问码错误"})
+						return
+					}
+				}
+			}
+			c.JSON(200, resp)
+			return
+		}
+	}
+
+	// 2. 查数据库
 	var share file.Share
 	if err := db.Where("token = ?", token).First(&share).Error; err != nil {
 		c.JSON(404, gin.H{"error": "分享链接不存在"})
@@ -313,13 +402,21 @@ func AccessShareHandler(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "资源不存在"})
 		return
 	}
-	c.JSON(200, PublicShareAccessResponse{
+	resp := PublicShareAccessResponse{
 		ResourceID: f.ID,
 		Name:       f.Name,
 		Type:       f.Type,
 		OwnerID:    f.OwnerID,
 		ExpireAt:   share.ExpireAt.Unix(),
-	})
+	}
+	// 3. 写入redis，过期时间与分享剩余时间一致（私有分享access_code不缓存）
+	expire := time.Until(share.ExpireAt)
+	if expire > 0 {
+		if data, err := json.Marshal(resp); err == nil {
+			rdb.Set(ctx, cacheKey, data, expire)
+		}
+	}
+	c.JSON(200, resp)
 }
 
 // @Summary 查询已有未过期的私有分享
@@ -367,6 +464,8 @@ func GetPrivateShareHandler(c *gin.Context) {
 // @Router /share [delete]
 func CancelShareHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
 	userID := c.MustGet("user_id").(uint)
 	token := c.Query("token")
 	resourceID := c.Query("resource_id")
@@ -393,5 +492,8 @@ func CancelShareHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "取消分享失败"})
 		return
 	}
+	// 删除缓存
+	cacheKey := "share:" + share.Token
+	rdb.Del(ctx, cacheKey)
 	c.JSON(http.StatusOK, gin.H{"message": "取消分享成功"})
 }

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"cloudDrive/internal/file"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,26 +10,34 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
-func setupTestRouter() (*gin.Engine, *gorm.DB) {
+func setupTestRouter() (*gin.Engine, *gorm.DB, *redis.Client) {
 	gin.SetMode(gin.TestMode)
 	db, _ := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	db.AutoMigrate(&file.File{}, &file.Share{})
 	r := gin.Default()
+	// 注入db和redis
+	rdb := redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+		DB:   0,
+	})
 	r.Use(func(c *gin.Context) {
 		c.Set("db", db)
+		c.Set("redis", rdb)
 		c.Next()
 	})
 	r.GET("/api/share/:token", AccessPublicShareHandler)
-	return r, db
+	return r, db, rdb
 }
 
 func TestAccessPublicShare_ValidAndExpired(t *testing.T) {
-	r, db := setupTestRouter()
+	r, db, rdb := setupTestRouter()
+	defer rdb.FlushDB(context.Background())
 	// 创建测试文件
 	fileID := "file-123"
 	f := file.File{
