@@ -150,8 +150,12 @@ func FileUploadHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库写入失败", "detail": err.Error()})
 		return
 	}
-	var u user.User
-	db.First(&u, userID)
+
+	u, err := user.GetUserByID(db, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "用户不存在"})
+		return
+	}
 	if u.StorageUsed+fileContent.Size > u.StorageLimit {
 		if err := db.Delete(&f).Error; err == nil {
 			_ = os.Remove("uploads/" + hashStr)
@@ -159,7 +163,10 @@ func FileUploadHandler(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "存储空间不足"})
 		return
 	}
-	db.Model(&u).UpdateColumn("storage_used", gorm.Expr("storage_used + ?", fileContent.Size))
+	if err := user.UpdateUserStorageUsed(db, userID, fileContent.Size); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新存储空间失败", "detail": err.Error()})
+		return
+	}
 	// 清理用户缓存
 	rdb := c.MustGet("redis").(*redis.Client)
 	ctx := context.Background()

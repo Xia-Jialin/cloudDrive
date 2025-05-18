@@ -24,3 +24,23 @@ type User struct {
 func (u *User) CheckPassword(password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password))
 }
+
+// GetUserByID 根据用户ID获取用户信息
+func GetUserByID(db *gorm.DB, userID uint) (*User, error) {
+	var user User
+	err := db.First(&user, userID).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// UpdateUserStorageUsed 更新用户已用存储空间
+func UpdateUserStorageUsed(db *gorm.DB, userID uint, delta int64) error {
+	return db.Model(&User{}).Where("id = ?", userID).UpdateColumn("storage_used", gorm.Expr("storage_used + ?", delta)).Error
+}
+
+// CreateUser 插入新用户（不做密码加密，需外部保证密码已加密）
+func CreateUser(db *gorm.DB, user *User) error {
+	return db.Create(user).Error
+}

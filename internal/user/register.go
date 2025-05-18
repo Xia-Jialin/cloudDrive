@@ -82,7 +82,7 @@ func Register(db *gorm.DB, req RegisterRequest) (*RegisterResponse, error) {
 			StorageLimit: 1073741824, // 1G
 			StorageUsed:  0,
 		}
-		if err := tx.Create(&user).Error; err != nil {
+		if err := CreateUser(tx, &user); err != nil {
 			log.Printf("[ERROR] 用户创建失败: %v", err)
 			return err
 		}

@@ -117,10 +117,12 @@ func UserStorageHandler(c *gin.Context) {
 			return
 		}
 	}
-	if err := db.First(&u, userID).Error; err != nil {
+	uPtr, err := user.GetUserByID(db, userID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "用户不存在"})
 		return
 	}
+	u = *uPtr
 	data, _ := json.Marshal(u)
 	rdb.Set(ctx, cacheKey, data, time.Hour)
 	c.JSON(http.StatusOK, gin.H{"storage_used": u.StorageUsed, "storage_limit": u.StorageLimit})
@@ -149,10 +151,12 @@ func UserMeHandler(c *gin.Context) {
 			return
 		}
 	}
-	if err := db.First(&u, userID).Error; err != nil {
+	uPtr, err := user.GetUserByID(db, userID)
+	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在"})
 		return
 	}
+	u = *uPtr
 	data, _ := json.Marshal(u)
 	rdb.Set(ctx, cacheKey, data, time.Hour)
 	u.Password = ""
