@@ -218,9 +218,27 @@ func FileUploadHandler(c *gin.Context) {
 // @Router /files/download/{id} [get]
 func FileDownloadHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
+	rdb := c.MustGet("redis").(*redis.Client)
 	userID := c.MustGet("user_id").(uint)
 	idStr := c.Param("id")
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("filemeta:%s", idStr)
 	var f file.File
+	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil && val != "" {
+		if err := json.Unmarshal([]byte(val), &f); err == nil {
+			if f.OwnerID != userID {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权限下载该文件"})
+				return
+			}
+			if f.Type != "file" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "只能下载文件类型"})
+				return
+			}
+			filePath := "uploads/" + f.Hash
+			c.FileAttachment(filePath, f.Name)
+			return
+		}
+	}
 	err := db.First(&f, "id = ?", idStr).Error
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
@@ -234,6 +252,8 @@ func FileDownloadHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "只能下载文件类型"})
 		return
 	}
+	jsonBytes, _ := json.Marshal(f)
+	rdb.Set(ctx, cacheKey, jsonBytes, 5*time.Minute)
 	filePath := "uploads/" + f.Hash
 	c.FileAttachment(filePath, f.Name)
 }
@@ -279,6 +299,9 @@ func FileDeleteHandler(c *gin.Context) {
 	if len(keys) > 0 {
 		rdb.Del(ctx, keys...)
 	}
+	// 清理文件元数据缓存
+	fileMetaKey := fmt.Sprintf("filemeta:%s", idStr)
+	rdb.Del(ctx, fileMetaKey)
 }
 
 // @Summary 重命名文件
@@ -330,6 +353,9 @@ func FileRenameHandler(c *gin.Context) {
 	if len(keys) > 0 {
 		rdb.Del(ctx, keys...)
 	}
+	// 清理文件元数据缓存
+	fileMetaKey := fmt.Sprintf("filemeta:%s", idStr)
+	rdb.Del(ctx, fileMetaKey)
 }
 
 // @Summary 移动文件/文件夹
@@ -385,6 +411,9 @@ func FileMoveHandler(c *gin.Context) {
 	if len(keys) > 0 {
 		rdb.Del(ctx, keys...)
 	}
+	// 清理文件元数据缓存
+	fileMetaKey := fmt.Sprintf("filemeta:%s", idStr)
+	rdb.Del(ctx, fileMetaKey)
 }
 
 // @Summary 搜索文件
@@ -449,9 +478,44 @@ func FileSearchHandler(c *gin.Context) {
 // @Router /files/preview/{id} [get]
 func FilePreviewHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
+	rdb := c.MustGet("redis").(*redis.Client)
 	userID := c.MustGet("user_id").(uint)
 	idStr := c.Param("id")
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("filemeta:%s", idStr)
 	var f file.File
+	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil && val != "" {
+		if err := json.Unmarshal([]byte(val), &f); err == nil {
+			if f.OwnerID != userID {
+				c.JSON(http.StatusForbidden, gin.H{"error": "无权限预览该文件"})
+				return
+			}
+			if f.Type != "file" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "只能预览文件类型"})
+				return
+			}
+			filePath := "uploads/" + f.Hash
+			ext := ""
+			if len(f.Name) > 0 {
+				dot := len(f.Name) - 1
+				for ; dot >= 0 && f.Name[dot] != '.'; dot-- {
+				}
+				if dot >= 0 {
+					ext = f.Name[dot:]
+				}
+			}
+			contentType := "application/octet-stream"
+			if ext != "" {
+				contentType = mime.TypeByExtension(ext)
+				if contentType == "" {
+					contentType = "application/octet-stream"
+				}
+			}
+			c.Header("Content-Type", contentType)
+			c.File(filePath)
+			return
+		}
+	}
 	err := db.First(&f, "id = ?", idStr).Error
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
@@ -465,6 +529,8 @@ func FilePreviewHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "只能预览文件类型"})
 		return
 	}
+	jsonBytes, _ := json.Marshal(f)
+	rdb.Set(ctx, cacheKey, jsonBytes, 5*time.Minute)
 	filePath := "uploads/" + f.Hash
 	ext := ""
 	if len(f.Name) > 0 {
