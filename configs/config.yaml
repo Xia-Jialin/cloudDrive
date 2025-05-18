@@ -12,4 +12,8 @@ redis:
   addr: "localhost:6379"
   password: ""
   db: 0
-  pool_size: 10 
+  pool_size: 10
+
+storage:
+  type: local
+  local_dir: uploads 

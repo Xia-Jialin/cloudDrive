@@ -3,6 +3,7 @@ package main
 import (
 	"cloudDrive/internal/file"
 	"cloudDrive/internal/handler"
+	"cloudDrive/internal/storage"
 	"cloudDrive/internal/user"
 	"flag"
 	"fmt"
@@ -106,10 +107,23 @@ func main() {
 	})
 	r.Use(sessions.Sessions("cloudsession", store))
 
-	// 注入 db 和 redis 到 gin.Context
+	// 读取storage配置
+	storageType := viper.GetString("storage.type")
+	localDir := viper.GetString("storage.local_dir")
+	var storageInst interface{} // 用于注入
+	switch storageType {
+	case "local":
+		storageInst = &storage.LocalFileStorage{Dir: localDir}
+	// 未来可扩展更多类型，如oss、ftp等
+	default:
+		log.Fatalf("不支持的存储类型: %s", storageType)
+	}
+
+	// 注入 db、redis、storage 到 gin.Context
 	r.Use(func(c *gin.Context) {
 		c.Set("db", db)
 		c.Set("redis", redisClient)
+		c.Set(handler.StorageKey, storageInst)
 		c.Next()
 	})
 

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"cloudDrive/internal/file"
+	"cloudDrive/internal/storage"
 	"cloudDrive/internal/user"
 	"context"
 	"crypto/sha256"
@@ -10,7 +11,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
@@ -75,6 +75,14 @@ func FileListHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"files": filesWithSize, "total": resp.Total})
 }
 
+// StorageKey 用于gin.Context注入storage依赖
+const StorageKey = "storage"
+
+// Storage实例获取函数（可根据实际情况注入或配置）
+func getStorage() storage.Storage {
+	return &storage.LocalFileStorage{Dir: "uploads"}
+}
+
 // @Summary 上传文件
 // @Description 上传文件到指定目录，需登录（Session）
 // @Tags 文件模块
@@ -89,6 +97,7 @@ func FileListHandler(c *gin.Context) {
 func FileUploadHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
 	userID := c.MustGet("user_id").(uint)
+	stor := c.MustGet(StorageKey).(storage.Storage)
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "未选择文件"})
@@ -119,8 +128,7 @@ func FileUploadHandler(c *gin.Context) {
 	var fileContent file.FileContent
 	err = db.First(&fileContent, "hash = ?", hashStr).Error
 	if err == gorm.ErrRecordNotFound {
-		savePath := "uploads/" + hashStr
-		err = os.WriteFile(savePath, fileBytes, 0644)
+		err = stor.Save(hashStr, fileBytes)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "文件保存失败", "detail": err.Error()})
 			return
@@ -158,7 +166,7 @@ func FileUploadHandler(c *gin.Context) {
 	}
 	if u.StorageUsed+fileContent.Size > u.StorageLimit {
 		if err := db.Delete(&f).Error; err == nil {
-			_ = os.Remove("uploads/" + hashStr)
+			_ = stor.Delete(hashStr)
 		}
 		c.JSON(http.StatusForbidden, gin.H{"error": "存储空间不足"})
 		return
