@@ -7,9 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 
 	_ "cloudDrive/docs"
 
+	"github.com/gin-contrib/cors"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/redis"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
 	swaggerFiles "github.com/swaggo/files"
@@ -66,6 +70,33 @@ func main() {
 
 	r := gin.Default()
 
+	// 添加 CORS 跨域中间件，允许携带 cookie
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:5173"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+	}))
+
+	redisAddr := viper.GetString("redis.addr")
+	redisPassword := viper.GetString("redis.password")
+	redisDB := viper.GetInt("redis.db")
+	redisPoolSize := viper.GetInt("redis.pool_size")
+
+	store, err := redis.NewStoreWithDB(redisPoolSize, "tcp", redisAddr, "", redisPassword, fmt.Sprintf("%d", redisDB), []byte("secret"))
+	if err != nil {
+		log.Fatalf("Redis session store 初始化失败: %v", err)
+	}
+	store.Options(sessions.Options{
+		Path:     "/",
+		MaxAge:   86400 * 7, // 7天
+		HttpOnly: true,
+		SameSite: http.SameSiteNoneMode, // 允许跨域携带 cookie
+		Secure:   false,                 // 本地开发 false，生产环境建议 true
+	})
+	r.Use(sessions.Sessions("cloudsession", store))
+
 	// 注入 db 到 gin.Context
 	r.Use(func(c *gin.Context) {
 		c.Set("db", db)
@@ -74,15 +105,23 @@ func main() {
 
 	r.POST("/api/user/register", handler.RegisterHandler)
 	r.POST("/api/user/login", handler.LoginHandler)
-	r.GET("/api/user/storage", handler.UserStorageHandler)
+	r.POST("/api/user/logout", handler.LogoutHandler)
 
-	r.GET("/api/files", handler.FileListHandler)
-	r.POST("/api/files/upload", handler.FileUploadHandler)
-	r.GET("/api/files/download/:id", handler.FileDownloadHandler)
-	r.DELETE("/api/files/:id", handler.FileDeleteHandler)
-	r.PUT("/api/files/:id/rename", handler.FileRenameHandler)
-	r.POST("/api/folders", handler.CreateFolderHandler)
-	r.PUT("/api/files/:id/move", handler.FileMoveHandler)
+	// 需要登录的接口
+	apiAuth := r.Group("/api")
+	apiAuth.Use(handler.SessionAuth())
+	apiAuth.GET("/user/storage", handler.UserStorageHandler)
+	apiAuth.GET("/user/me", handler.UserMeHandler)
+	apiAuth.GET("/files", handler.FileListHandler)
+	apiAuth.POST("/files/upload", handler.FileUploadHandler)
+	apiAuth.GET("/files/download/:id", handler.FileDownloadHandler)
+	apiAuth.DELETE("/files/:id", handler.FileDeleteHandler)
+	apiAuth.PUT("/files/:id/rename", handler.FileRenameHandler)
+	apiAuth.POST("/folders", handler.CreateFolderHandler)
+	apiAuth.PUT("/files/:id/move", handler.FileMoveHandler)
+	apiAuth.GET("/files/search", handler.FileSearchHandler)
+	apiAuth.GET("/files/preview/:id", handler.FilePreviewHandler)
+
 	r.POST("/api/share/public", handler.CreatePublicShareHandler)
 	r.GET("/api/share/public", handler.GetPublicShareHandler)
 	r.GET("/api/share/:token", handler.AccessShareHandler)
@@ -90,8 +129,6 @@ func main() {
 	r.POST("/api/share/private", handler.CreatePrivateShareHandler)
 	r.GET("/api/share/private", handler.GetPrivateShareHandler)
 	r.DELETE("/api/share", handler.CancelShareHandler)
-	r.GET("/api/files/search", handler.FileSearchHandler)
-	r.GET("/api/files/preview/:id", handler.FilePreviewHandler)
 
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 

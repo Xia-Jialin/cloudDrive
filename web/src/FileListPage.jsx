@@ -30,13 +30,12 @@ const FileListPage = () => {
   const fetchFiles = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
       let url = search ? '/api/files/search' : '/api/files';
       const params = search
         ? { name: search, page, page_size: pageSize }
         : { parent_id: currentPath.length > 0 ? currentPath[currentPath.length - 1] : "", page, page_size: pageSize, order_by: 'upload_time', order: 'desc' };
       const res = await axios.get(url, {
-        headers: { Authorization: 'Bearer ' + token },
+        credentials: 'include',
         params
       });
       setFiles(res.data.files.map(f => ({
@@ -70,15 +69,10 @@ const FileListPage = () => {
   };
 
   const handleDownload = (file) => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      message.error('请先登录');
-      return;
-    }
     // 创建隐藏a标签实现下载
     const url = `/api/files/download/${file.id}`;
     fetch(url, {
-      headers: { Authorization: 'Bearer ' + token },
+      credentials: 'include',
     })
       .then(res => {
         if (!res.ok) throw new Error('下载失败');
@@ -100,14 +94,9 @@ const FileListPage = () => {
   };
 
   const handleDelete = async (file) => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      message.error('请先登录');
-      return;
-    }
     try {
       await axios.delete(`/api/files/${file.id}`, {
-        headers: { Authorization: 'Bearer ' + token },
+        credentials: 'include',
       });
       message.success('删除成功');
       fetchFiles();
@@ -119,15 +108,11 @@ const FileListPage = () => {
   const handleUpload = async ({ file }) => {
     setUploading(true);
     try {
-      const token = localStorage.getItem('token');
       const formData = new FormData();
       formData.append('file', file);
       formData.append('parent_id', currentPath.length > 0 ? currentPath[currentPath.length - 1] : "");
       await axios.post('/api/files/upload', formData, {
-        headers: {
-          Authorization: 'Bearer ' + token,
-          'Content-Type': 'multipart/form-data',
-        },
+        credentials: 'include',
       });
       message.success('上传成功');
       fetchFiles();
@@ -147,10 +132,9 @@ const FileListPage = () => {
       message.warning('请输入新的文件名');
       return;
     }
-    const token = localStorage.getItem('token');
     try {
       await axios.put(`/api/files/${file.id}/rename`, { new_name: newName }, {
-        headers: { Authorization: 'Bearer ' + token },
+        credentials: 'include',
       });
       message.success('重命名成功');
       setRenameModal({ visible: false, file: null, newName: '' });
@@ -170,13 +154,12 @@ const FileListPage = () => {
       message.warning('请输入文件夹名');
       return;
     }
-    const token = localStorage.getItem('token');
     try {
       await axios.post('/api/folders', {
         name,
         parent_id: currentPath.length > 0 ? currentPath[currentPath.length - 1] : "",
       }, {
-        headers: { Authorization: 'Bearer ' + token },
+        credentials: 'include',
       });
       message.success('文件夹创建成功');
       setCreateFolderModal({ visible: false, name: '' });
@@ -188,11 +171,10 @@ const FileListPage = () => {
 
   // 获取所有可选目标文件夹（简单递归/平铺，实际可优化为树）
   const fetchAllFolders = async () => {
-    const token = localStorage.getItem('token');
     let all = [{ label: '/', value: '' }]; // 先加根目录
     async function fetchFolderChildren(parentId, path = []) {
       const res = await axios.get('/api/files', {
-        headers: { Authorization: 'Bearer ' + token },
+        credentials: 'include',
         params: { parent_id: parentId, page: 1, page_size: 100 }
       });
       for (const f of res.data.files) {
@@ -217,10 +199,9 @@ const FileListPage = () => {
       message.warning('请选择目标文件夹');
       return;
     }
-    const token = localStorage.getItem('token');
     try {
       await axios.put(`/api/files/${file.id}/move`, { new_parent_id: target }, {
-        headers: { Authorization: 'Bearer ' + token },
+        credentials: 'include',
       });
       message.success('移动成功');
       setMoveModal({ visible: false, file: null, target: '' });
@@ -233,10 +214,9 @@ const FileListPage = () => {
   // 拖拽移动文件到文件夹
   const handleMoveByDrag = async (fileId, targetFolderId) => {
     if (!fileId || fileId === targetFolderId) return;
-    const token = localStorage.getItem('token');
     try {
       await axios.put(`/api/files/${fileId}/move`, { new_parent_id: targetFolderId }, {
-        headers: { Authorization: 'Bearer ' + token },
+        credentials: 'include',
       });
       message.success('移动成功');
       fetchFiles();
@@ -258,10 +238,9 @@ const FileListPage = () => {
   const handleMoveToParentByDrag = async (fileId) => {
     if (!fileId || currentPath.length === 0) return;
     const parentId = currentPath.length > 1 ? currentPath[currentPath.length - 2] : '';
-    const token = localStorage.getItem('token');
     try {
       await axios.put(`/api/files/${fileId}/move`, { new_parent_id: parentId }, {
-        headers: { Authorization: 'Bearer ' + token },
+        credentials: 'include',
       });
       message.success('移动成功');
       fetchFiles();
@@ -640,10 +619,9 @@ const FileListPage = () => {
             Modal.confirm({
               title: '确定要取消该分享吗？',
               onOk: async () => {
-                const userToken = localStorage.getItem('token');
                 try {
                   await axios.delete('/api/share', {
-                    headers: { Authorization: 'Bearer ' + userToken },
+                    credentials: 'include',
                     params: { token: shareModal.link.split('/').pop() }
                   });
                   message.success('取消分享成功');

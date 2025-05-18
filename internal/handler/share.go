@@ -5,12 +5,10 @@ import (
 	"time"
 
 	"cloudDrive/internal/file"
-	"cloudDrive/internal/user"
 
 	"math/rand"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -355,11 +353,10 @@ func GetPrivateShareHandler(c *gin.Context) {
 }
 
 // @Summary 取消分享
-// @Description 取消指定的分享链接（token或resource_id），仅分享创建者可操作
+// @Description 取消指定的分享链接（token或resource_id），仅分享创建者可操作，需登录（Session）
 // @Tags 分享
 // @Accept json
 // @Produce json
-// @Param Authorization header string true "Bearer Token"
 // @Param token path string false "分享Token"
 // @Param resource_id query string false "资源ID"
 // @Success 200 {object} map[string]interface{}
@@ -370,39 +367,25 @@ func GetPrivateShareHandler(c *gin.Context) {
 // @Router /share [delete]
 func CancelShareHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
-	tokenStr := c.GetHeader("Authorization")
-	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
-		tokenStr = tokenStr[7:]
-	}
-	claims := user.Claims{}
-	secret := "cloudDriveSecret"
-	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
-		return []byte(secret), nil
-	})
-	if err != nil || !parsed.Valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
-		return
-	}
-
+	userID := c.MustGet("user_id").(uint)
 	token := c.Query("token")
 	resourceID := c.Query("resource_id")
 	if token == "" && resourceID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "token或resource_id参数必填"})
 		return
 	}
-
 	var share file.Share
 	var dbErr error
 	if token != "" {
 		dbErr = db.Where("token = ?", token).First(&share).Error
 	} else {
-		dbErr = db.Where("resource_id = ? AND creator_id = ? AND expire_at > ?", resourceID, claims.UserID, time.Now()).First(&share).Error
+		dbErr = db.Where("resource_id = ? AND creator_id = ? AND expire_at > ?", resourceID, userID, time.Now()).First(&share).Error
 	}
 	if dbErr != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "分享不存在"})
 		return
 	}
-	if share.CreatorID != claims.UserID {
+	if share.CreatorID != userID {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权限取消该分享"})
 		return
 	}

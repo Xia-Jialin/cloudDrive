@@ -137,13 +137,8 @@ paths:
     get:
       consumes:
       - application/json
-      description: 获取指定目录下的文件和文件夹，支持分页和排序
+      description: 获取指定目录下的文件和文件夹，支持分页和排序，需登录（Session）
       parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
       - description: 父目录ID，根目录为0
         in: query
         name: parent_id
@@ -188,13 +183,8 @@ paths:
     delete:
       consumes:
       - application/json
-      description: 删除指定文件
+      description: 删除指定文件，需登录（Session）
       parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
       - description: 文件ID
         in: path
         name: id
@@ -235,13 +225,8 @@ paths:
     put:
       consumes:
       - application/json
-      description: 移动指定文件/文件夹到新目录
+      description: 移动指定文件/文件夹到新目录，需登录（Session）
       parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
       - description: 文件ID
         in: path
         name: id
@@ -293,13 +278,8 @@ paths:
     put:
       consumes:
       - application/json
-      description: 重命名指定文件
+      description: 重命名指定文件，需登录（Session）
       parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
       - description: 文件ID
         in: path
         name: id
@@ -351,13 +331,8 @@ paths:
     get:
       consumes:
       - application/json
-      description: 下载指定文件
+      description: 下载指定文件，需登录（Session）
       parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
       - description: 文件ID
         in: path
         name: id
@@ -399,11 +374,6 @@ paths:
       - application/json
       description: 在线预览指定文件，仅支持已登录用户
       parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
       - description: 文件ID
         in: path
         name: id
@@ -443,13 +413,8 @@ paths:
     get:
       consumes:
       - application/json
-      description: 按文件名模糊搜索文件
+      description: 按文件名模糊搜索文件，需登录（Session）
       parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
       - description: 文件名
         in: query
         name: name
@@ -477,13 +442,8 @@ paths:
     post:
       consumes:
       - multipart/form-data
-      description: 上传文件到指定目录
+      description: 上传文件到指定目录，需登录（Session）
       parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
       - description: 文件
         in: formData
         name: file
@@ -518,13 +478,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: 在指定目录下新建文件夹
+      description: 在指定目录下新建文件夹，需登录（Session）
       parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
       - description: 文件夹信息
         in: body
         name: data
@@ -561,13 +516,8 @@ paths:
     delete:
       consumes:
       - application/json
-      description: 取消指定的分享链接（token或resource_id），仅分享创建者可操作
+      description: 取消指定的分享链接（token或resource_id），仅分享创建者可操作，需登录（Session）
       parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
       - description: 分享Token
         in: path
         name: token
@@ -839,6 +789,39 @@ paths:
       summary: 用户登录
       tags:
       - 用户模块
+  /user/logout:
+    post:
+      description: 退出登录，清除session
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 用户退出登录
+      tags:
+      - 用户模块
+  /user/me:
+    get:
+      consumes:
+      - application/json
+      description: 获取当前登录用户的基本信息
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 获取当前用户信息
+      tags:
+      - 用户模块
   /user/register:
     post:
       consumes:
@@ -865,6 +848,27 @@ paths:
             additionalProperties: true
             type: object
       summary: 用户注册
+      tags:
+      - 用户模块
+  /user/storage:
+    get:
+      consumes:
+      - application/json
+      description: 获取当前用户的存储空间使用量和总量，需登录（Session）
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 获取用户存储空间信息
       tags:
       - 用户模块
 swagger: "2.0"

@@ -17,7 +17,7 @@ const docTemplate = `{
     "paths": {
         "/files": {
             "get": {
-                "description": "获取指定目录下的文件和文件夹，支持分页和排序",
+                "description": "获取指定目录下的文件和文件夹，支持分页和排序，需登录（Session）",
                 "consumes": [
                     "application/json"
                 ],
@@ -29,13 +29,6 @@ const docTemplate = `{
                 ],
                 "summary": "获取文件/文件夹列表",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
                     {
                         "type": "string",
                         "description": "父目录ID，根目录为0",
@@ -93,7 +86,7 @@ const docTemplate = `{
         },
         "/files/download/{id}": {
             "get": {
-                "description": "下载指定文件",
+                "description": "下载指定文件，需登录（Session）",
                 "consumes": [
                     "application/json"
                 ],
@@ -105,13 +98,6 @@ const docTemplate = `{
                 ],
                 "summary": "下载文件",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
                     {
                         "type": "string",
                         "description": "文件ID",
@@ -174,13 +160,6 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
                         "description": "文件ID",
                         "name": "id",
                         "in": "path",
@@ -227,7 +206,7 @@ const docTemplate = `{
         },
         "/files/search": {
             "get": {
-                "description": "按文件名模糊搜索文件",
+                "description": "按文件名模糊搜索文件，需登录（Session）",
                 "consumes": [
                     "application/json"
                 ],
@@ -239,13 +218,6 @@ const docTemplate = `{
                 ],
                 "summary": "搜索文件",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
                     {
                         "type": "string",
                         "description": "文件名",
@@ -278,7 +250,7 @@ const docTemplate = `{
         },
         "/files/upload": {
             "post": {
-                "description": "上传文件到指定目录",
+                "description": "上传文件到指定目录，需登录（Session）",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -290,13 +262,6 @@ const docTemplate = `{
                 ],
                 "summary": "上传文件",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
                     {
                         "type": "file",
                         "description": "文件",
@@ -338,7 +303,7 @@ const docTemplate = `{
         },
         "/files/{id}": {
             "delete": {
-                "description": "删除指定文件",
+                "description": "删除指定文件，需登录（Session）",
                 "consumes": [
                     "application/json"
                 ],
@@ -350,13 +315,6 @@ const docTemplate = `{
                 ],
                 "summary": "删除文件",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
                     {
                         "type": "string",
                         "description": "文件ID",
@@ -406,7 +364,7 @@ const docTemplate = `{
         },
         "/files/{id}/move": {
             "put": {
-                "description": "移动指定文件/文件夹到新目录",
+                "description": "移动指定文件/文件夹到新目录，需登录（Session）",
                 "consumes": [
                     "application/json"
                 ],
@@ -418,13 +376,6 @@ const docTemplate = `{
                 ],
                 "summary": "移动文件/文件夹",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
                     {
                         "type": "string",
                         "description": "文件ID",
@@ -490,7 +441,7 @@ const docTemplate = `{
         },
         "/files/{id}/rename": {
             "put": {
-                "description": "重命名指定文件",
+                "description": "重命名指定文件，需登录（Session）",
                 "consumes": [
                     "application/json"
                 ],
@@ -502,13 +453,6 @@ const docTemplate = `{
                 ],
                 "summary": "重命名文件",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
                     {
                         "type": "string",
                         "description": "文件ID",
@@ -574,7 +518,7 @@ const docTemplate = `{
         },
         "/folders": {
             "post": {
-                "description": "在指定目录下新建文件夹",
+                "description": "在指定目录下新建文件夹，需登录（Session）",
                 "consumes": [
                     "application/json"
                 ],
@@ -586,13 +530,6 @@ const docTemplate = `{
                 ],
                 "summary": "新建文件夹",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
                     {
                         "description": "文件夹信息",
                         "name": "data",
@@ -637,7 +574,7 @@ const docTemplate = `{
         },
         "/share": {
             "delete": {
-                "description": "取消指定的分享链接（token或resource_id），仅分享创建者可操作",
+                "description": "取消指定的分享链接（token或resource_id），仅分享创建者可操作，需登录（Session）",
                 "consumes": [
                     "application/json"
                 ],
@@ -649,13 +586,6 @@ const docTemplate = `{
                 ],
                 "summary": "取消分享",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
                     {
                         "type": "string",
                         "description": "分享Token",
@@ -1052,6 +982,55 @@ const docTemplate = `{
                 }
             }
         },
+        "/user/logout": {
+            "post": {
+                "description": "退出登录，清除session",
+                "tags": [
+                    "用户模块"
+                ],
+                "summary": "用户退出登录",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/user/me": {
+            "get": {
+                "description": "获取当前登录用户的基本信息",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "用户模块"
+                ],
+                "summary": "获取当前用户信息",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/user/register": {
             "post": {
                 "description": "注册新用户",
@@ -1086,6 +1065,37 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/user/storage": {
+            "get": {
+                "description": "获取当前用户的存储空间使用量和总量，需登录（Session）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "用户模块"
+                ],
+                "summary": "获取用户存储空间信息",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true

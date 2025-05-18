@@ -77,8 +77,8 @@ function Login({ onLogin, onSwitch }) {
     e.preventDefault();
     setMsg('');
     try {
-      const { data } = await axios.post('/api/user/login', form);
-      onLogin(data);
+      const res = await axios.post('/api/user/login', form, { withCredentials: true });
+      onLogin(res.data.user);
     } catch (err) {
       setMsg(err.response?.data?.error || '登录失败');
     }
@@ -99,32 +99,13 @@ function Login({ onLogin, onSwitch }) {
   );
 }
 
-function StorageInfo({ token }) {
-  const [storage, setStorage] = useState({ storage_used: 0, storage_limit: 1 });
-  useEffect(() => {
-    if (!token) return;
-    axios.get('/api/user/storage', {
-      headers: { Authorization: 'Bearer ' + token }
-    }).then(res => setStorage(res.data)).catch(() => {});
-  }, [token]);
-  const percent = Math.round((storage.storage_used / storage.storage_limit) * 100);
-  function formatSize(bytes) {
-    if (bytes > 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-    if (bytes > 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
-    if (bytes > 1024) return (bytes / 1024).toFixed(2) + ' KB';
-    return bytes + ' B';
-  }
-  return (
-    <div className="user-info">
-      <span>空间使用：</span>
-      <progress value={percent} max="100" style={{ width: 160, verticalAlign: 'middle' }} />
-      <span style={{ marginLeft: 8 }}>{formatSize(storage.storage_used)} / {formatSize(storage.storage_limit)} ({percent}%)</span>
-    </div>
-  );
-}
-
 function Home({ user, onLogout }) {
-  const token = localStorage.getItem('token');
+  const [storage, setStorage] = useState({ used: 0, limit: 0 });
+  useEffect(() => {
+    axios.get('/api/user/storage', { withCredentials: true })
+      .then(res => setStorage({ used: res.data.storage_used, limit: res.data.storage_limit }))
+      .catch(() => setStorage({ used: 0, limit: 0 }));
+  }, []);
   return (
     <div>
       <div style={{
@@ -133,7 +114,9 @@ function Home({ user, onLogout }) {
       }}>
         <div>
           欢迎，{user.nickname || user.username}（{user.role}）
-          <StorageInfo token={token} />
+          <span style={{ marginLeft: 16, color: '#888', fontSize: 14 }}>
+            储存空间：{(storage.used / 1024 / 1024).toFixed(2)} MB / {(storage.limit / 1024 / 1024).toFixed(2)} MB
+          </span>
         </div>
         <button className="logout-btn" onClick={onLogout}>退出登录</button>
       </div>
@@ -144,20 +127,26 @@ function Home({ user, onLogout }) {
 
 export default function App() {
   const [page, setPage] = useState('login');
-  const [user, setUser] = useState(() => {
-    const t = localStorage.getItem('token');
-    const u = localStorage.getItem('user');
-    return t && u ? JSON.parse(u) : null;
-  });
-  const handleLogin = ({ token, user }) => {
-    localStorage.setItem('token', token);
-    localStorage.setItem('user', JSON.stringify(user));
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    axios.get('/api/user/me', { withCredentials: true })
+      .then(res => {
+        setUser(res.data.user);
+        setPage('home');
+      })
+      .catch(() => {
+        setUser(null);
+        setPage('login');
+      });
+  }, []);
+
+  const handleLogin = (user) => {
     setUser(user);
     setPage('home');
   };
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+  const handleLogout = async () => {
+    await fetch('/api/user/logout', { method: 'POST', credentials: 'include' });
     setUser(null);
     setPage('login');
   };

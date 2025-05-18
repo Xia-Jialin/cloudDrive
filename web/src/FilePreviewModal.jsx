@@ -12,7 +12,7 @@ export default function FilePreviewModal({ file, visible, onClose }) {
     if (file.type.startsWith('image/')) {
       setLoading(true);
       fetch(`/api/files/preview/${file.id}`, {
-        headers: { Authorization: 'Bearer ' + localStorage.getItem('token') }
+        credentials: 'include'
       })
         .then(res => res.blob())
         .then(blob => setBlobUrl(URL.createObjectURL(blob)))
@@ -21,7 +21,7 @@ export default function FilePreviewModal({ file, visible, onClose }) {
     } else if (file.type === 'application/pdf') {
       setLoading(true);
       fetch(`/api/files/preview/${file.id}`, {
-        headers: { Authorization: 'Bearer ' + localStorage.getItem('token') }
+        credentials: 'include'
       })
         .then(res => res.blob())
         .then(blob => setBlobUrl(URL.createObjectURL(blob)))
@@ -30,7 +30,7 @@ export default function FilePreviewModal({ file, visible, onClose }) {
     } else if (file.type.startsWith('video/') || file.type.startsWith('audio/')) {
       setLoading(true);
       fetch(`/api/files/preview/${file.id}`, {
-        headers: { Authorization: 'Bearer ' + localStorage.getItem('token') }
+        credentials: 'include'
       })
         .then(res => res.blob())
         .then(blob => setBlobUrl(URL.createObjectURL(blob)))
@@ -39,7 +39,7 @@ export default function FilePreviewModal({ file, visible, onClose }) {
     } else if (file.type.startsWith('text/')) {
       setLoading(true);
       fetch(`/api/files/preview/${file.id}`, {
-        headers: { Authorization: 'Bearer ' + localStorage.getItem('token') }
+        credentials: 'include'
       })
         .then(res => res.text())
         .then(setContent)

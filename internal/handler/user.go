@@ -4,8 +4,8 @@ import (
 	"cloudDrive/internal/user"
 	"net/http"
 
+	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 )
 
@@ -54,37 +54,66 @@ func LoginHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, resp)
+	// 登录成功，写入session
+	session := sessions.Default(c)
+	session.Set("user_id", resp.User.ID)
+	session.Save()
+	c.JSON(http.StatusOK, gin.H{"user": resp.User})
+}
+
+// LogoutHandler 用户退出登录
+// @Summary 用户退出登录
+// @Description 退出登录，清除session
+// @Tags 用户模块
+// @Success 200 {object} map[string]interface{}
+// @Router /user/logout [post]
+func LogoutHandler(c *gin.Context) {
+	session := sessions.Default(c)
+	session.Clear()
+	session.Options(sessions.Options{
+		MaxAge: -1, // 立即过期
+		Path:   "/",
+	})
+	session.Delete("user_id")
+	session.Save()
+	c.JSON(http.StatusOK, gin.H{"msg": "已退出登录"})
 }
 
 // @Summary 获取用户存储空间信息
-// @Description 获取当前用户的存储空间使用量和总量
+// @Description 获取当前用户的存储空间使用量和总量，需登录（Session）
 // @Tags 用户模块
 // @Accept json
 // @Produce json
-// @Param Authorization header string true "Bearer Token"
 // @Success 200 {object} map[string]interface{}
 // @Failure 401 {object} map[string]interface{}
 // @Router /user/storage [get]
 func UserStorageHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
-	tokenStr := c.GetHeader("Authorization")
-	if len(tokenStr) > 7 && tokenStr[:7] == "Bearer " {
-		tokenStr = tokenStr[7:]
-	}
-	claims := user.Claims{}
-	secret := "cloudDriveSecret"
-	parsed, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
-		return []byte(secret), nil
-	})
-	if err != nil || !parsed.Valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或Token无效"})
-		return
-	}
+	userID := c.MustGet("user_id").(uint)
 	var u user.User
-	if err := db.First(&u, claims.UserID).Error; err != nil {
+	if err := db.First(&u, userID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "用户不存在"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"storage_used": u.StorageUsed, "storage_limit": u.StorageLimit})
+}
+
+// @Summary 获取当前用户信息
+// @Description 获取当前登录用户的基本信息
+// @Tags 用户模块
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Router /user/me [get]
+func UserMeHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	userID := c.MustGet("user_id").(uint)
+	var u user.User
+	if err := db.First(&u, userID).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在"})
+		return
+	}
+	u.Password = "" // 不返回密码
+	c.JSON(http.StatusOK, gin.H{"user": u})
 }
