@@ -4,8 +4,14 @@ import (
 	"cloudDrive/internal/user"
 	"net/http"
 
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
 )
 
@@ -30,6 +36,11 @@ func RegisterHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// 清理缓存
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("user:info:%d", resp.ID)
+	rdb.Del(ctx, cacheKey)
 	c.JSON(http.StatusOK, gin.H{"id": resp.ID})
 }
 
@@ -58,6 +69,11 @@ func LoginHandler(c *gin.Context) {
 	session := sessions.Default(c)
 	session.Set("user_id", resp.User.ID)
 	session.Save()
+	// 清理缓存
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("user:info:%d", resp.User.ID)
+	rdb.Del(ctx, cacheKey)
 	c.JSON(http.StatusOK, gin.H{"user": resp.User})
 }
 
@@ -89,12 +105,24 @@ func LogoutHandler(c *gin.Context) {
 // @Router /user/storage [get]
 func UserStorageHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
+	rdb := c.MustGet("redis").(*redis.Client)
 	userID := c.MustGet("user_id").(uint)
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("user:info:%d", userID)
+
 	var u user.User
+	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
+		if err := json.Unmarshal([]byte(val), &u); err == nil {
+			c.JSON(http.StatusOK, gin.H{"storage_used": u.StorageUsed, "storage_limit": u.StorageLimit})
+			return
+		}
+	}
 	if err := db.First(&u, userID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "用户不存在"})
 		return
 	}
+	data, _ := json.Marshal(u)
+	rdb.Set(ctx, cacheKey, data, time.Hour)
 	c.JSON(http.StatusOK, gin.H{"storage_used": u.StorageUsed, "storage_limit": u.StorageLimit})
 }
 
@@ -108,12 +136,25 @@ func UserStorageHandler(c *gin.Context) {
 // @Router /user/me [get]
 func UserMeHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
+	rdb := c.MustGet("redis").(*redis.Client)
 	userID := c.MustGet("user_id").(uint)
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("user:info:%d", userID)
+
 	var u user.User
+	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
+		if err := json.Unmarshal([]byte(val), &u); err == nil {
+			u.Password = ""
+			c.JSON(http.StatusOK, gin.H{"user": u})
+			return
+		}
+	}
 	if err := db.First(&u, userID).Error; err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在"})
 		return
 	}
-	u.Password = "" // 不返回密码
+	data, _ := json.Marshal(u)
+	rdb.Set(ctx, cacheKey, data, time.Hour)
+	u.Password = ""
 	c.JSON(http.StatusOK, gin.H{"user": u})
 }

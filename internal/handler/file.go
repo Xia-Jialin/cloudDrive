@@ -3,8 +3,10 @@ package handler
 import (
 	"cloudDrive/internal/file"
 	"cloudDrive/internal/user"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
 )
 
@@ -157,6 +160,11 @@ func FileUploadHandler(c *gin.Context) {
 		return
 	}
 	db.Model(&u).UpdateColumn("storage_used", gorm.Expr("storage_used + ?", fileContent.Size))
+	// 清理用户缓存
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("user:info:%d", userID)
+	rdb.Del(ctx, cacheKey)
 	c.JSON(http.StatusOK, gin.H{"id": f.ID, "name": f.Name, "size": fileContent.Size})
 }
 
@@ -224,6 +232,11 @@ func FileDeleteHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+	// 清理用户缓存
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("user:info:%d", userID)
+	rdb.Del(ctx, cacheKey)
 }
 
 // @Summary 重命名文件

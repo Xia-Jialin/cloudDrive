@@ -15,6 +15,7 @@ import (
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/redis"
 	"github.com/gin-gonic/gin"
+	goredis "github.com/go-redis/redis/v8"
 	"github.com/spf13/viper"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
@@ -84,6 +85,14 @@ func main() {
 	redisDB := viper.GetInt("redis.db")
 	redisPoolSize := viper.GetInt("redis.pool_size")
 
+	// 新增 go-redis/v8 客户端初始化
+	redisClient := goredis.NewClient(&goredis.Options{
+		Addr:     redisAddr,
+		Password: redisPassword,
+		DB:       redisDB,
+		PoolSize: redisPoolSize,
+	})
+
 	store, err := redis.NewStoreWithDB(redisPoolSize, "tcp", redisAddr, "", redisPassword, fmt.Sprintf("%d", redisDB), []byte("secret"))
 	if err != nil {
 		log.Fatalf("Redis session store 初始化失败: %v", err)
@@ -97,9 +106,10 @@ func main() {
 	})
 	r.Use(sessions.Sessions("cloudsession", store))
 
-	// 注入 db 到 gin.Context
+	// 注入 db 和 redis 到 gin.Context
 	r.Use(func(c *gin.Context) {
 		c.Set("db", db)
+		c.Set("redis", redisClient)
 		c.Next()
 	})
 
