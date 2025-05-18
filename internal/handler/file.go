@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -35,12 +36,22 @@ import (
 // @Router /files [get]
 func FileListHandler(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
+	rdb := c.MustGet("redis").(*redis.Client)
 	userID := c.MustGet("user_id").(uint)
 	parentID := c.DefaultQuery("parent_id", "")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 	orderBy := c.DefaultQuery("order_by", "upload_time")
 	order := c.DefaultQuery("order", "desc")
+
+	// 构造缓存key
+	cacheKey := fmt.Sprintf("filelist:%d:%s:%d:%d:%s:%s", userID, parentID, page, pageSize, orderBy, order)
+	ctx := context.Background()
+	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil && val != "" {
+		c.Data(http.StatusOK, "application/json", []byte(val))
+		return
+	}
+
 	resp, err := file.ListFiles(db, file.ListFilesRequest{
 		ParentID: parentID,
 		OwnerID:  userID,
@@ -72,7 +83,11 @@ func FileListHandler(c *gin.Context) {
 		}
 		filesWithSize = append(filesWithSize, fileMap)
 	}
-	c.JSON(http.StatusOK, gin.H{"files": filesWithSize, "total": resp.Total})
+	result := gin.H{"files": filesWithSize, "total": resp.Total}
+	jsonBytes, _ := json.Marshal(result)
+	// 写入缓存
+	rdb.Set(ctx, cacheKey, jsonBytes, 5*time.Minute)
+	c.Data(http.StatusOK, "application/json", jsonBytes)
 }
 
 // StorageKey 用于gin.Context注入storage依赖
@@ -180,6 +195,12 @@ func FileUploadHandler(c *gin.Context) {
 	ctx := context.Background()
 	cacheKey := fmt.Sprintf("user:info:%d", userID)
 	rdb.Del(ctx, cacheKey)
+	// 清理文件列表缓存（父目录）
+	fileListPrefix := fmt.Sprintf("filelist:%d:%s", userID, parentID)
+	keys, _ := rdb.Keys(ctx, fileListPrefix+"*").Result()
+	if len(keys) > 0 {
+		rdb.Del(ctx, keys...)
+	}
 	c.JSON(http.StatusOK, gin.H{"id": f.ID, "name": f.Name, "size": fileContent.Size})
 }
 
@@ -252,6 +273,12 @@ func FileDeleteHandler(c *gin.Context) {
 	ctx := context.Background()
 	cacheKey := fmt.Sprintf("user:info:%d", userID)
 	rdb.Del(ctx, cacheKey)
+	// 清理文件列表缓存（所有目录）
+	fileListPrefix := fmt.Sprintf("filelist:%d:", userID)
+	keys, _ := rdb.Keys(ctx, fileListPrefix+"*").Result()
+	if len(keys) > 0 {
+		rdb.Del(ctx, keys...)
+	}
 }
 
 // @Summary 重命名文件
@@ -295,6 +322,14 @@ func FileRenameHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "重命名成功"})
+	// 清理文件列表缓存（所有目录）
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
+	fileListPrefix := fmt.Sprintf("filelist:%d:", userID)
+	keys, _ := rdb.Keys(ctx, fileListPrefix+"*").Result()
+	if len(keys) > 0 {
+		rdb.Del(ctx, keys...)
+	}
 }
 
 // @Summary 移动文件/文件夹
@@ -342,6 +377,14 @@ func FileMoveHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "移动成功"})
+	// 清理文件列表缓存（所有目录）
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
+	fileListPrefix := fmt.Sprintf("filelist:%d:", userID)
+	keys, _ := rdb.Keys(ctx, fileListPrefix+"*").Result()
+	if len(keys) > 0 {
+		rdb.Del(ctx, keys...)
+	}
 }
 
 // @Summary 搜索文件
