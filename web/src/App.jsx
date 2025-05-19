@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 import FileListPage from './FileListPage';
+import RecycleBinPage from './RecycleBinPage';
 
 function passwordComplexityCheck(password) {
   let hasUpper = /[A-Z]/.test(password);
@@ -101,6 +102,7 @@ function Login({ onLogin, onSwitch }) {
 
 function Home({ user, onLogout }) {
   const [storage, setStorage] = useState({ used: 0, limit: 0 });
+  const [showRecycle, setShowRecycle] = useState(false);
   useEffect(() => {
     axios.get('/api/user/storage', { withCredentials: true })
       .then(res => setStorage({ used: res.data.storage_used, limit: res.data.storage_limit }))
@@ -118,9 +120,12 @@ function Home({ user, onLogout }) {
             储存空间：{(storage.used / 1024 / 1024).toFixed(2)} MB / {(storage.limit / 1024 / 1024).toFixed(2)} MB
           </span>
         </div>
-        <button className="logout-btn" onClick={onLogout}>退出登录</button>
+        <div>
+          <button style={{marginRight: 12}} onClick={() => setShowRecycle(v => !v)}>{showRecycle ? '返回文件' : '回收站'}</button>
+          <button className="logout-btn" onClick={onLogout}>退出登录</button>
+        </div>
       </div>
-      <FileListPage />
+      {showRecycle ? <RecycleBinPage /> : <FileListPage />}
     </div>
   );
 }

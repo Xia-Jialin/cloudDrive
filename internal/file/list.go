@@ -71,3 +71,20 @@ func ListFiles(db *gorm.DB, req ListFilesRequest) (*ListFilesResponse, error) {
 	}
 	return &ListFilesResponse{Files: files, Total: total}, nil
 }
+
+// ListRecycleBinFiles 分页查询用户回收站（软删除）的文件
+func ListRecycleBinFiles(db *gorm.DB, ownerID uint, page, pageSize int) ([]File, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 10
+	}
+	var files []File
+	err := db.Unscoped().Where("owner_id = ? AND deleted_at IS NOT NULL", ownerID).
+		Offset((page - 1) * pageSize).Limit(pageSize).Find(&files).Error
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
+}

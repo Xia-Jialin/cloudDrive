@@ -154,6 +154,11 @@ func main() {
 	r.GET("/api/share/private", handler.GetPrivateShareHandler)
 	r.DELETE("/api/share", handler.CancelShareHandler)
 
+	// 注册回收站相关API
+	apiAuth.GET("/recycle", handler.RecycleBinListHandler)
+	apiAuth.POST("/recycle/restore", handler.RecycleBinRestoreHandler)
+	apiAuth.DELETE("/recycle", handler.RecycleBinDeleteHandler)
+
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	r.Run(":8080")
