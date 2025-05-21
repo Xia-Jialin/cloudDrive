@@ -4,6 +4,7 @@ import { UploadOutlined, DownloadOutlined, DeleteOutlined, FolderOpenOutlined, F
 import axios from 'axios';
 import dayjs from 'dayjs';
 import FilePreviewModal from './FilePreviewModal';
+import TreeSelectModal from './components/TreeSelectModal';
 
 const { Search } = Input;
 
@@ -19,7 +20,7 @@ const FileListPage = () => {
   const [currentPathNames, setCurrentPathNames] = useState([]); // 路径为名称数组
   const [renameModal, setRenameModal] = useState({ visible: false, file: null, newName: '' });
   const [createFolderModal, setCreateFolderModal] = useState({ visible: false, name: '' });
-  const [moveModal, setMoveModal] = useState({ visible: false, file: null, target: '' });
+  const [moveModal, setMoveModal] = useState({ visible: false, file: null, error: '' });
   const [folderOptions, setFolderOptions] = useState([]);
   const [dragOverFolderId, setDragOverFolderId] = useState(null); // 拖拽高亮目标文件夹
   const [shareModal, setShareModal] = useState({ visible: false, file: null, expire: 24, link: '', type: 'public', accessCode: '' });
@@ -189,26 +190,29 @@ const FileListPage = () => {
   };
 
   const handleMove = (file) => {
-    setMoveModal({ visible: true, file, target: '' }); // target: '' 表示根目录
-    fetchAllFolders();
+    setMoveModal({ visible: true, file, error: '' });
   };
 
-  const doMove = async () => {
-    const { file, target } = moveModal;
-    if (target === undefined || target === null) { // 允许''作为根目录
-      message.warning('请选择目标文件夹');
+  const handleMoveSelect = async (targetFolderId) => {
+    const { file } = moveModal;
+    if (targetFolderId === undefined || targetFolderId === null) {
+      setMoveModal(modal => ({ ...modal, error: '请选择目标文件夹' }));
       return;
     }
     try {
-      await axios.put(`/api/files/${file.id}/move`, { new_parent_id: target }, {
+      await axios.put(`/api/files/${file.id}/move`, { new_parent_id: targetFolderId }, {
         credentials: 'include',
       });
       message.success('移动成功');
-      setMoveModal({ visible: false, file: null, target: '' });
+      setMoveModal({ visible: false, file: null, error: '' });
       fetchFiles();
     } catch (e) {
-      message.error(e.response?.data?.error || '移动失败');
+      setMoveModal(modal => ({ ...modal, error: e.response?.data?.error || '移动失败' }));
     }
+  };
+
+  const handleMoveCancel = () => {
+    setMoveModal({ visible: false, file: null, error: '' });
   };
 
   // 拖拽移动文件到文件夹
@@ -588,24 +592,12 @@ const FileListPage = () => {
           onPressEnter={doCreateFolder}
         />
       </Modal>
-      <Modal
-        title="移动到..."
-        open={moveModal.visible}
-        onOk={doMove}
-        onCancel={() => setMoveModal({ visible: false, file: null, target: '' })}
-        okText="确定"
-        cancelText="取消"
-      >
-        <Select
-          style={{ width: '100%' }}
-          placeholder="请选择目标文件夹"
-          value={moveModal.target}
-          onChange={v => setMoveModal(m => ({ ...m, target: v }))}
-          options={folderOptions.filter(opt => opt.value !== moveModal.file?.id)}
-          showSearch
-          optionFilterProp="label"
-        />
-      </Modal>
+      <TreeSelectModal
+        visible={moveModal.visible}
+        onSelect={handleMoveSelect}
+        onCancel={handleMoveCancel}
+        error={moveModal.error}
+      />
       <Modal
         title="生成分享链接"
         open={shareModal.visible}
