@@ -75,6 +75,9 @@ func TestRestoreFileFromRecycleBin(t *testing.T) {
 	userID := uint(3)
 	root := &UserRoot{UserID: userID, RootID: "root3", CreatedAt: time.Now()}
 	db.Create(root)
+	// 新增：创建根目录文件夹
+	rootFolder := &File{ID: root.RootID, Name: "root", Type: "folder", ParentID: "", OwnerID: userID, UploadTime: time.Now()}
+	db.Create(rootFolder)
 	file := &File{ID: "f3", Name: "c.txt", Type: "file", ParentID: root.RootID, OwnerID: userID, UploadTime: time.Now()}
 	db.Create(file)
 	db.Delete(file) // 软删除
@@ -111,5 +114,67 @@ func TestPermanentlyDeleteFileFromRecycleBin(t *testing.T) {
 	db.Unscoped().First(&f, "id = ?", file.ID)
 	if f.ID != "" {
 		t.Errorf("file should be permanently deleted, got: %+v", f)
+	}
+}
+
+func TestRestoreFile_ParentNotExist(t *testing.T) {
+	db := setupTestDB(t)
+	userID := uint(5)
+	root := &UserRoot{UserID: userID, RootID: "root5", CreatedAt: time.Now()}
+	db.Create(root)
+	// 创建父目录并软删除
+	parent := &File{ID: "p1", Name: "parent", Type: "folder", ParentID: root.RootID, OwnerID: userID, UploadTime: time.Now()}
+	db.Create(parent)
+	db.Delete(parent)
+	// 创建子文件并软删除
+	file := &File{ID: "f5", Name: "child.txt", Type: "file", ParentID: parent.ID, OwnerID: userID, UploadTime: time.Now()}
+	db.Create(file)
+	db.Delete(file)
+	// 尝试还原
+	err := RestoreFile(db, file.ID, userID)
+	if err != ErrRestoreParentNotExist {
+		t.Errorf("should return ErrRestoreParentNotExist, got %v", err)
+	}
+}
+
+func TestRestoreFile_WithTargetParentID(t *testing.T) {
+	db := setupTestDB(t)
+	userID := uint(6)
+	root := &UserRoot{UserID: userID, RootID: "root6", CreatedAt: time.Now()}
+	db.Create(root)
+	rootFolder := &File{ID: root.RootID, Name: "root", Type: "folder", ParentID: "", OwnerID: userID, UploadTime: time.Now()}
+	db.Create(rootFolder)
+	// 新建两个目录
+	folderA := &File{ID: "fa", Name: "A", Type: "folder", ParentID: root.RootID, OwnerID: userID, UploadTime: time.Now()}
+	db.Create(folderA)
+	folderB := &File{ID: "fb", Name: "B", Type: "folder", ParentID: root.RootID, OwnerID: userID, UploadTime: time.Now()}
+	db.Create(folderB)
+	// 在A下创建同名文件
+	file := &File{ID: "f6", Name: "test.txt", Type: "file", ParentID: folderA.ID, OwnerID: userID, UploadTime: time.Now()}
+	db.Create(file)
+	db.Delete(file)
+	// 1. 指定B为新还原路径，B下无同名文件，应成功
+	err := RestoreFile(db, file.ID, userID, folderB.ID)
+	if err != nil {
+		t.Fatalf("restore file to B failed: %v", err)
+	}
+	var restored File
+	db.First(&restored, "id = ?", file.ID)
+	if restored.ParentID != folderB.ID {
+		t.Errorf("file should be restored to B, got parentID=%s", restored.ParentID)
+	}
+	// 2. 指定不存在的目录，应返回 ErrRestoreParentNotExist
+	db.Delete(file) // 再次软删除
+	err = RestoreFile(db, file.ID, userID, "not_exist")
+	if err != ErrRestoreParentNotExist {
+		t.Errorf("should return ErrRestoreParentNotExist, got %v", err)
+	}
+	// 3. 指定A为新还原路径，A下有同名文件，应返回 ErrNameExists
+	db.Delete(file) // 再次软删除
+	file2 := &File{ID: "f7", Name: "test.txt", Type: "file", ParentID: folderA.ID, OwnerID: userID, UploadTime: time.Now()}
+	db.Create(file2)
+	err = RestoreFile(db, file.ID, userID, folderA.ID)
+	if err != ErrNameExists {
+		t.Errorf("should return ErrNameExists, got %v", err)
 	}
 }

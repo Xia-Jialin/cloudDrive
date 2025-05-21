@@ -2,12 +2,12 @@ package file
 
 import (
 	"errors"
-	"fmt"
 
 	"gorm.io/gorm"
 )
 
 var ErrNoPermission = errors.New("无权限删除该文件")
+var ErrRestoreParentNotExist = errors.New("原路径不存在，请选择新的还原路径")
 
 // DeleteFile 删除指定ID的文件，只有所有者可以删除
 func DeleteFile(db *gorm.DB, fileID string, ownerID uint) error {
@@ -31,26 +31,43 @@ func DeleteFile(db *gorm.DB, fileID string, ownerID uint) error {
 	})
 }
 
-// RestoreFile 恢复回收站中的文件（软删除还原）
-func RestoreFile(db *gorm.DB, fileID string, ownerID uint) error {
+// RestoreFile 恢复回收站中的文件（软删除还原），可指定新还原路径
+func RestoreFile(db *gorm.DB, fileID string, ownerID uint, targetParentID ...string) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		var f File
 		if err := tx.Unscoped().First(&f, "id = ?", fileID).Error; err != nil {
-			fmt.Printf("[RestoreFile] 查询文件失败 fileID=%s, ownerID=%d, err=%v\n", fileID, ownerID, err)
 			return err
 		}
 		if f.OwnerID != ownerID {
-			fmt.Printf("[RestoreFile] 无权限还原 fileID=%s, ownerID=%d, 文件owner=%d\n", fileID, ownerID, f.OwnerID)
 			return ErrNoPermission
+		}
+		// 选择目标目录
+		parentID := f.ParentID
+		if len(targetParentID) > 0 && targetParentID[0] != "" {
+			parentID = targetParentID[0]
+		}
+		// 校验父目录是否存在且未被软删除
+		if parentID != "" {
+			var parent File
+			if err := tx.Unscoped().First(&parent, "id = ?", parentID).Error; err != nil {
+				return ErrRestoreParentNotExist
+			}
+			if parent.DeletedAt.Valid {
+				return ErrRestoreParentNotExist
+			}
+		}
+		// 校验新目录下无同名文件/文件夹
+		var count int64
+		tx.Model(&File{}).Where("parent_id = ? AND name = ? AND id != ?", parentID, f.Name, f.ID).Count(&count)
+		if count > 0 {
+			return ErrNameExists
 		}
 		if f.DeletedAt.Valid {
 			res := tx.Unscoped().Model(&File{}).
 				Where("id = ? AND owner_id = ?", fileID, ownerID).
-				Update("deleted_at", nil)
-			fmt.Printf("[RestoreFile] 还原文件 fileID=%s, ownerID=%d, updateErr=%v, rowsAffected=%d\n", fileID, ownerID, res.Error, res.RowsAffected)
+				Updates(map[string]interface{}{"deleted_at": nil, "parent_id": parentID})
 			return res.Error
 		}
-		fmt.Printf("[RestoreFile] 文件已是正常状态 fileID=%s, ownerID=%d\n", fileID, ownerID)
 		return nil // 已是正常状态
 	})
 }

@@ -3,10 +3,12 @@ import { Table, Button, message, Popconfirm } from 'antd';
 import dayjs from 'dayjs';
 import { getRecycleBinFiles, restoreFile, deleteFilePermanently } from './api';
 import './RecycleBinPage.css';
+import TreeSelectModal from './components/TreeSelectModal';
 
 function RecycleBinPage() {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [treeModal, setTreeModal] = useState({ visible: false, fileId: null, error: '' });
 
   const fetchFiles = async () => {
     setLoading(true);
@@ -30,12 +32,28 @@ function RecycleBinPage() {
       fetchFiles();
     } catch (e) {
       if (e.response?.data?.error?.includes('原路径不存在')) {
-        message.warning('原路径不存在，请选择新的还原路径');
-        // 可弹窗目录树，选择后再次调用 restoreFile(fileId, newPath)
+        setTreeModal({ visible: true, fileId, error: '' });
       } else {
         message.error(e.response?.data?.error || '还原失败');
       }
     }
+  };
+
+  // 目录树弹窗选择后回调
+  const handleTreeSelect = async (targetPath) => {
+    const { fileId } = treeModal;
+    try {
+      await restoreFile(fileId, targetPath);
+      message.success('还原成功');
+      setTreeModal({ visible: false, fileId: null, error: '' });
+      fetchFiles();
+    } catch (e) {
+      setTreeModal(modal => ({ ...modal, error: e.response?.data?.error || '还原失败' }));
+    }
+  };
+
+  const handleTreeCancel = () => {
+    setTreeModal({ visible: false, fileId: null, error: '' });
   };
 
   const handleDelete = async (fileId) => {
@@ -102,6 +120,12 @@ function RecycleBinPage() {
         pagination={false}
         bordered
         style={{ background: '#fff', borderRadius: 8 }}
+      />
+      <TreeSelectModal
+        visible={treeModal.visible}
+        onSelect={handleTreeSelect}
+        onCancel={handleTreeCancel}
+        error={treeModal.error}
       />
     </div>
   );

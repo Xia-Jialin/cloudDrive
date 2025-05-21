@@ -43,8 +43,12 @@ func RecycleBinRestoreHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})
 		return
 	}
-	// 这里只实现基础还原，target_path逻辑可后续扩展
-	err := file.RestoreFile(db, req.FileID, userID)
+	var err error
+	if req.TargetPath != "" {
+		err = file.RestoreFile(db, req.FileID, userID, req.TargetPath)
+	} else {
+		err = file.RestoreFile(db, req.FileID, userID)
+	}
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
