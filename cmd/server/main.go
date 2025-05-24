@@ -103,7 +103,7 @@ func main() {
 		MaxAge:   86400 * 7, // 7天
 		HttpOnly: true,
 		SameSite: http.SameSiteNoneMode, // 允许跨域携带 cookie
-		Secure:   false,                 // 本地开发 false，生产环境建议 true
+		Secure:   true,                  // 必须为 true，哪怕本地开发
 	})
 	r.Use(sessions.Sessions("cloudsession", store))
 
