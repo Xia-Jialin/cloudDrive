@@ -1,0 +1,58 @@
+version: '3.8'
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: clouddrive-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: clouddrive
+      MYSQL_USER: root
+      MYSQL_PASSWORD: 123456
+    ports:
+      - "3306:3306"
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: clouddrive-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  clouddrive:
+    build: .
+    container_name: clouddrive-server
+    restart: always
+    depends_on:
+      - mysql
+      - redis
+    environment:
+      # 覆盖 config.yaml 主要参数
+      CONFIG_PATH: ./configs/config.yaml
+      # 如需通过环境变量注入数据库/redis参数，可扩展 viper 读取逻辑
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./cmd/server/uploads:/app/uploads
+      - ./configs:/app/configs
+
+  web:
+    build:
+      context: ./web
+    container_name: clouddrive-web
+    restart: always
+    depends_on:
+      - clouddrive
+    ports:
+      - "80:80"
+    networks:
+      - default
+
+volumes:
+  mysql_data:
+  redis_data: 
