@@ -1,5 +1,9 @@
 package storage
 
+import (
+	"io"
+)
+
 // FileInfo 表示key/value结构
 // Key 为唯一标识，Content 为内容
 type FileInfo struct {
@@ -12,7 +16,7 @@ type FileInfo struct {
 // Read 读取指定key的内容
 // Delete 删除指定key的内容
 type Storage interface {
-	Save(key string, content []byte) error
+	Save(key string, content io.Reader) error
 	Read(key string) ([]byte, error)
 	Delete(key string) error
 }

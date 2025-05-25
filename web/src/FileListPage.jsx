@@ -5,6 +5,7 @@ import axios from 'axios';
 import dayjs from 'dayjs';
 import FilePreviewModal from './FilePreviewModal';
 import TreeSelectModal from './components/TreeSelectModal';
+import sha256 from 'js-sha256';
 
 const { Search } = Input;
 
@@ -109,9 +110,20 @@ const FileListPage = () => {
   const handleUpload = async ({ file }) => {
     setUploading(true);
     try {
+      // 计算文件 hash
+      const hash = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const hashValue = sha256.arrayBuffer(e.target.result);
+          resolve(Array.from(hashValue).map(b => b.toString(16).padStart(2, '0')).join(''));
+        };
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+      });
       const formData = new FormData();
       formData.append('file', file);
       formData.append('parent_id', currentPath.length > 0 ? currentPath[currentPath.length - 1] : "");
+      formData.append('hash', hash);
       await axios.post('/api/files/upload', formData, {
         credentials: 'include',
       });

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"io"
 	"io/ioutil"
 	"os"
 )
@@ -11,9 +12,15 @@ type LocalFileStorage struct {
 	Dir string // 存储根目录
 }
 
-func (l *LocalFileStorage) Save(key string, content []byte) error {
+func (l *LocalFileStorage) Save(key string, content io.Reader) error {
 	filePath := l.Dir + "/" + key
-	return ioutil.WriteFile(filePath, content, 0644)
+	f, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, content)
+	return err
 }
 
 func (l *LocalFileStorage) Read(key string) ([]byte, error) {

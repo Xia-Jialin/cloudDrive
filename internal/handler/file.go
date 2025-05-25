@@ -12,8 +12,11 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
@@ -105,6 +108,7 @@ func getStorage() storage.Storage {
 // @Produce json
 // @Param file formData file true "文件"
 // @Param parent_id formData string false "父目录ID，根目录为0"
+// @Param hash formData string false "前端计算的文件hash"
 // @Success 200 {object} map[string]interface{}
 // @Failure 401 {object} map[string]interface{}
 // @Failure 500 {object} map[string]interface{}
@@ -133,17 +137,36 @@ func FileUploadHandler(c *gin.Context) {
 		return
 	}
 	defer fileObj.Close()
+	clientHash := c.PostForm("hash")
 	hashObj := sha256.New()
-	fileBytes, err := io.ReadAll(io.TeeReader(fileObj, hashObj))
+	tmpFilePath := "tmp_upload_" + uuid.New().String()
+	tmpFile, err := os.Create(tmpFilePath)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件读取失败", "detail": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "临时文件创建失败", "detail": err.Error()})
 		return
 	}
-	hashStr := hex.EncodeToString(hashObj.Sum(nil))
+	defer func() {
+		tmpFile.Close()
+		os.Remove(tmpFilePath)
+	}()
+	tee := io.TeeReader(fileObj, hashObj)
+	_, err = io.Copy(tmpFile, tee)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件写入失败", "detail": err.Error()})
+		return
+	}
+	serverHash := hex.EncodeToString(hashObj.Sum(nil))
+	if clientHash != "" && clientHash != serverHash {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件内容校验失败，请重试"})
+		return
+	}
+	hashStr := serverHash
+	// 检查 hash 是否已存在
 	var fileContent file.FileContent
 	err = db.First(&fileContent, "hash = ?", hashStr).Error
 	if err == gorm.ErrRecordNotFound {
-		err = stor.Save(hashStr, fileBytes)
+		tmpFile.Seek(0, 0)
+		err = stor.Save(hashStr, tmpFile)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "文件保存失败", "detail": err.Error()})
 			return
@@ -196,7 +219,7 @@ func FileUploadHandler(c *gin.Context) {
 	cacheKey := fmt.Sprintf("user:info:%d", userID)
 	rdb.Del(ctx, cacheKey)
 	// 清理文件列表缓存（父目录）
-	fileListPrefix := fmt.Sprintf("filelist:%d:%s", userID, parentID)
+	fileListPrefix := fmt.Sprintf("filelist:%d:", userID)
 	keys, _ := rdb.Keys(ctx, fileListPrefix+"*").Result()
 	if len(keys) > 0 {
 		rdb.Del(ctx, keys...)

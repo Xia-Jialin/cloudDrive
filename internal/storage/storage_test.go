@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"os"
 	"testing"
 )
@@ -21,7 +22,7 @@ func TestStorageInterface(t *testing.T) {
 	s := &LocalFileStorage{Dir: dir}
 
 	t.Run("保存key", func(t *testing.T) {
-		err := s.Save(testFile.Key, testFile.Content)
+		err := s.Save(testFile.Key, bytes.NewReader(testFile.Content))
 		if err != nil {
 			t.Errorf("保存key失败: %v", err)
 		}
