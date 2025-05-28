@@ -5,10 +5,15 @@ import (
 	"cloudDrive/internal/handler"
 	"cloudDrive/internal/storage"
 	"cloudDrive/internal/user"
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	_ "cloudDrive/docs"
 
@@ -31,6 +36,49 @@ import (
 // @BasePath /api
 
 var db *gorm.DB
+
+// Redis事件驱动分片清理
+func StartChunkCleaner(redisClient *goredis.Client, baseDir string) {
+	ctx := context.Background()
+	pubsub := redisClient.PSubscribe(ctx, "__keyevent@0__:expired")
+	log.Println("分片清理监听已启动...")
+	for msg := range pubsub.Channel() {
+		if strings.HasPrefix(msg.Payload, "upload:") {
+			uploadId := strings.TrimPrefix(msg.Payload, "upload:")
+			chunkDir := filepath.Join(baseDir, "multipart", uploadId)
+			if err := os.RemoveAll(chunkDir); err == nil {
+				log.Printf("已自动清理分片目录: %s\n", chunkDir)
+			}
+		}
+	}
+}
+
+// 定时兜底分片清理
+func CleanOrphanChunks(redisClient *goredis.Client, baseDir string) {
+	ctx := context.Background()
+	multipartDir := filepath.Join(baseDir, "multipart")
+	entries, _ := os.ReadDir(multipartDir)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		uploadId := entry.Name()
+		exists, _ := redisClient.Exists(ctx, "upload:"+uploadId).Result()
+		if exists == 0 {
+			os.RemoveAll(filepath.Join(multipartDir, uploadId))
+			log.Printf("定时兜底清理分片目录: %s\n", filepath.Join(multipartDir, uploadId))
+		}
+	}
+}
+
+func StartChunkCleanerCron(redisClient *goredis.Client, baseDir string) {
+	go func() {
+		for {
+			CleanOrphanChunks(redisClient, baseDir)
+			time.Sleep(12 * time.Hour)
+		}
+	}()
+}
 
 func main() {
 	// 支持通过命令行参数指定配置文件路径
@@ -145,6 +193,10 @@ func main() {
 	apiAuth.PUT("/files/:id/move", handler.FileMoveHandler)
 	apiAuth.GET("/files/search", handler.FileSearchHandler)
 	apiAuth.GET("/files/preview/:id", handler.FilePreviewHandler)
+	apiAuth.POST("/files/multipart/init", handler.MultipartInitHandler)
+	apiAuth.POST("/files/multipart/upload", handler.MultipartUploadPartHandler)
+	apiAuth.GET("/files/multipart/status", handler.MultipartStatusHandler)
+	apiAuth.POST("/files/multipart/complete", handler.MultipartCompleteHandler)
 
 	r.POST("/api/share/public", handler.CreatePublicShareHandler)
 	r.GET("/api/share/public", handler.GetPublicShareHandler)
@@ -160,6 +212,10 @@ func main() {
 	apiAuth.DELETE("/recycle", handler.RecycleBinDeleteHandler)
 
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
+	// 新增分片清理监听和定时兜底
+	go StartChunkCleaner(redisClient, localDir)
+	StartChunkCleanerCron(redisClient, localDir)
 
 	r.Run(":8080")
 }

@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -573,4 +574,268 @@ func FilePreviewHandler(c *gin.Context) {
 	}
 	c.Header("Content-Type", contentType)
 	c.File(filePath)
+}
+
+// ================= 分片上传相关接口（含Redis校验） =================
+
+// 工具函数：校验 uploadId 是否属于当前用户，并返回上传信息
+func checkUploadIdBelongsToUser(c *gin.Context, uploadId string) (map[string]interface{}, bool) {
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
+	userID := c.MustGet("user_id").(uint)
+	val, err := rdb.Get(ctx, "upload:"+uploadId).Result()
+	if err != nil {
+		return nil, false
+	}
+	var info map[string]interface{}
+	if err := json.Unmarshal([]byte(val), &info); err != nil {
+		return nil, false
+	}
+	uid, ok := info["user_id"].(float64)
+	if !ok || uint(uid) != userID {
+		return nil, false
+	}
+	return info, true
+}
+
+// @Summary 初始化分片上传
+// @Description 初始化分片上传，返回uploadId
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param name body string true "文件名"
+// @Param size body int64 true "文件大小"
+// @Param hash body string true "文件hash"
+// @Param total_parts body int true "总分片数"
+// @Success 200 {object} map[string]interface{}
+// @Router /files/multipart/init [post]
+func MultipartInitHandler(c *gin.Context) {
+	var req struct {
+		Name       string `json:"name"`
+		Size       int64  `json:"size"`
+		Hash       string `json:"hash"`
+		TotalParts int    `json:"total_parts"`
+		ParentID   string `json:"parent_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" || req.Hash == "" || req.TotalParts <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	db := c.MustGet("db").(*gorm.DB)
+	userID := c.MustGet("user_id").(uint)
+	// 秒传判断
+	var fileContent file.FileContent
+	err := db.First(&fileContent, "hash = ?", req.Hash).Error
+	if err == nil {
+		// 已存在，直接返回
+		c.JSON(http.StatusOK, gin.H{
+			"upload_id": "",
+			"instant":   true,
+		})
+		return
+	}
+	// 正常分片上传流程
+	uploadId := uuid.New().String()
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
+	info := map[string]interface{}{
+		"user_id":     userID,
+		"hash":        req.Hash,
+		"total_parts": req.TotalParts,
+		"size":        req.Size,
+		"name":        req.Name,
+		"parent_id":   req.ParentID,
+	}
+	infoJson, _ := json.Marshal(info)
+	rdb.Set(ctx, "upload:"+uploadId, infoJson, 24*time.Hour)
+	c.JSON(http.StatusOK, gin.H{"upload_id": uploadId, "instant": false})
+}
+
+// @Summary 上传分片
+// @Description 上传单个分片
+// @Tags 文件模块
+// @Accept multipart/form-data
+// @Produce json
+// @Param upload_id formData string true "分片上传ID"
+// @Param part_number formData int true "分片序号"
+// @Param part file true "分片内容"
+// @Success 200 {object} map[string]interface{}
+// @Router /files/multipart/upload [post]
+func MultipartUploadPartHandler(c *gin.Context) {
+	stor := getStorage().(storage.MultipartStorage)
+	uploadId := c.PostForm("upload_id")
+	partNumberStr := c.PostForm("part_number")
+	partNumber, err := strconv.Atoi(partNumberStr)
+	if err != nil || uploadId == "" || partNumber <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	// 校验 uploadId 归属
+	_, ok := checkUploadIdBelongsToUser(c, uploadId)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权限或uploadId无效"})
+		return
+	}
+	fileHeader, err := c.FormFile("part")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "未选择分片文件"})
+		return
+	}
+	fileObj, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "分片读取失败"})
+		return
+	}
+	defer fileObj.Close()
+	data, err := io.ReadAll(fileObj)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "分片读取失败"})
+		return
+	}
+	if err := stor.SavePart(uploadId, partNumber, data); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "分片保存失败", "detail": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "分片上传成功"})
+}
+
+// @Summary 查询已上传分片
+// @Description 查询已上传分片序号
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param upload_id query string true "分片上传ID"
+// @Success 200 {object} map[string]interface{}
+// @Router /files/multipart/status [get]
+func MultipartStatusHandler(c *gin.Context) {
+	stor := getStorage().(storage.MultipartStorage)
+	uploadId := c.Query("upload_id")
+	if uploadId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	_, ok := checkUploadIdBelongsToUser(c, uploadId)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权限或uploadId无效"})
+		return
+	}
+	parts, err := stor.ListUploadedParts(uploadId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败", "detail": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"uploaded_parts": parts})
+}
+
+// @Summary 合并分片
+// @Description 合并所有分片为完整文件
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param upload_id body string true "分片上传ID"
+// @Param total_parts body int true "总分片数"
+// @Param target_key body string true "合并后目标文件key（如hash）"
+// @Success 200 {object} map[string]interface{}
+// @Router /files/multipart/complete [post]
+func MultipartCompleteHandler(c *gin.Context) {
+	stor := getStorage().(storage.MultipartStorage)
+	db := c.MustGet("db").(*gorm.DB)
+	userID := c.MustGet("user_id").(uint)
+	var req struct {
+		UploadId   string `json:"upload_id"`
+		TotalParts int    `json:"total_parts"`
+		TargetKey  string `json:"target_key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.UploadId == "" || req.TotalParts <= 0 || req.TargetKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	info, ok := checkUploadIdBelongsToUser(c, req.UploadId)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权限或uploadId无效"})
+		return
+	}
+	if int(info["total_parts"].(float64)) != req.TotalParts {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "分片数不一致"})
+		return
+	}
+	// ====== 空间配额校验 ======
+	fileSize := int64(info["size"].(float64))
+	u, err := user.GetUserByID(db, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "用户不存在"})
+		return
+	}
+	if u.StorageUsed+fileSize > u.StorageLimit {
+		c.JSON(http.StatusForbidden, gin.H{"error": "存储空间不足"})
+		return
+	}
+	// ========================
+	if err := stor.MergeParts(req.UploadId, req.TotalParts, req.TargetKey); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "合并失败", "detail": err.Error()})
+		return
+	}
+	// 合并后 hash 校验
+	filePath := filepath.Join("uploads", req.TargetKey)
+	fCheck, err := os.Open(filePath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件打开失败", "detail": err.Error()})
+		return
+	}
+	defer fCheck.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, fCheck); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "hash 校验失败", "detail": err.Error()})
+		return
+	}
+	serverHash := hex.EncodeToString(h.Sum(nil))
+	if serverHash != req.TargetKey {
+		os.Remove(filePath)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件 hash 校验失败，上传内容有误"})
+		return
+	}
+	// 合并成功后更新用户已用空间
+	if err := user.UpdateUserStorageUsed(db, userID, fileSize); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新存储空间失败", "detail": err.Error()})
+		return
+	}
+	// 合并成功后插入 file_content 和 file 表
+	hash := info["hash"].(string)
+	name := info["name"].(string)
+	parentID := c.DefaultQuery("parent_id", "")
+	if parentID == "" {
+		var userRoot file.UserRoot
+		if err := db.First(&userRoot, "user_id = ?", userID).Error; err == nil {
+			parentID = userRoot.RootID
+		}
+	}
+	var fileContent file.FileContent
+	err = db.First(&fileContent, "hash = ?", hash).Error
+	if err == gorm.ErrRecordNotFound {
+		fileContent = file.FileContent{Hash: hash, Size: fileSize}
+		db.Create(&fileContent)
+	}
+	f := file.File{
+		Name:       name,
+		Hash:       hash,
+		Type:       "file",
+		ParentID:   parentID,
+		OwnerID:    userID,
+		UploadTime: time.Now(),
+	}
+	db.Create(&f)
+	// 合并成功后清理 Redis 记录
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
+	rdb.Del(ctx, "upload:"+req.UploadId)
+	// 清理用户缓存
+	cacheKey := fmt.Sprintf("user:info:%d", userID)
+	rdb.Del(ctx, cacheKey)
+	// 清理文件列表缓存（所有目录）
+	fileListPrefix := fmt.Sprintf("filelist:%d:", userID)
+	keys, _ := rdb.Keys(ctx, fileListPrefix+"*").Result()
+	if len(keys) > 0 {
+		rdb.Del(ctx, keys...)
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "合并成功"})
 }

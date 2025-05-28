@@ -27,6 +27,7 @@ const FileListPage = () => {
   const [shareModal, setShareModal] = useState({ visible: false, file: null, expire: 24, link: '', type: 'public', accessCode: '' });
   const [previewFile, setPreviewFile] = useState(null);
   const [previewVisible, setPreviewVisible] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState(0);
 
   // 获取当前目录下的文件和文件夹
   const fetchFiles = async () => {
@@ -107,32 +108,82 @@ const FileListPage = () => {
     }
   };
 
+  // 分片上传核心函数
+  const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB
+
+  async function calcFileHash(file) {
+    // 用 js-sha256 直接返回 hex 字符串
+    const arrayBuffer = await file.arrayBuffer();
+    return sha256(arrayBuffer);
+  }
+
+  function sliceFile(file, chunkSize = CHUNK_SIZE) {
+    const chunks = [];
+    let cur = 0;
+    while (cur < file.size) {
+      chunks.push(file.slice(cur, cur + chunkSize));
+      cur += chunkSize;
+    }
+    return chunks;
+  }
+
   const handleUpload = async ({ file }) => {
     setUploading(true);
+    setUploadPercent(0);
     try {
-      // 计算文件 hash
-      const hash = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = function(e) {
-          const hashValue = sha256.arrayBuffer(e.target.result);
-          resolve(Array.from(hashValue).map(b => b.toString(16).padStart(2, '0')).join(''));
-        };
-        reader.onerror = reject;
-        reader.readAsArrayBuffer(file);
-      });
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('parent_id', currentPath.length > 0 ? currentPath[currentPath.length - 1] : "");
-      formData.append('hash', hash);
-      await axios.post('/api/files/upload', formData, {
-        credentials: 'include',
-      });
+      // 1. 计算 hash
+      const hash = await calcFileHash(file);
+      // 2. 切片
+      const chunks = sliceFile(file);
+      // 3. 初始化分片上传
+      const initResp = await axios.post('/api/files/multipart/init', {
+        name: file.name,
+        size: file.size,
+        hash,
+        total_parts: chunks.length,
+        parent_id: currentPath.length > 0 ? currentPath[currentPath.length - 1] : ""
+      }, { withCredentials: true });
+      if (initResp.data.instant) {
+        message.success('秒传成功');
+        fetchFiles();
+        setUploading(false);
+        setUploadPercent(0);
+        return;
+      }
+      const upload_id = initResp.data.upload_id;
+      // 4. 查询已上传分片（断点续传）
+      const statusResp = await axios.get(`/api/files/multipart/status?upload_id=${upload_id}`, { withCredentials: true });
+      const uploadedSet = new Set(statusResp.data.uploaded_parts);
+      // 5. 依次上传分片
+      let uploadedCount = 0;
+      for (let i = 0; i < chunks.length; i++) {
+        if (uploadedSet.has(i + 1)) {
+          uploadedCount++;
+          setUploadPercent(Math.round((uploadedCount / chunks.length) * 100));
+          continue;
+        }
+        const form = new FormData();
+        form.append('upload_id', upload_id);
+        form.append('part_number', i + 1);
+        form.append('part', chunks[i]);
+        await axios.post('/api/files/multipart/upload', form, { withCredentials: true });
+        uploadedCount++;
+        setUploadPercent(Math.round((uploadedCount / chunks.length) * 100));
+      }
+      // 6. 合并分片
+      await axios.post('/api/files/multipart/complete', {
+        upload_id,
+        total_parts: chunks.length,
+        target_key: hash
+      }, { withCredentials: true });
+      setUploadPercent(100);
       message.success('上传成功');
       fetchFiles();
     } catch (e) {
       message.error(e.response?.data?.error || '上传失败');
     }
     setUploading(false);
+    setUploadPercent(0);
   };
 
   const handleRename = (file) => {
@@ -558,6 +609,10 @@ const FileListPage = () => {
             上传文件
           </Button>
         </Upload>
+        {uploading && <div style={{ width: 200, display: 'inline-block', marginLeft: 8 }}>
+          <progress value={uploadPercent} max={100} style={{ width: '100%' }} />
+          <span>{uploadPercent}%</span>
+        </div>}
       </Space>
       <Table
         columns={columns}

@@ -11,6 +11,11 @@ import (
 func SessionAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		session := sessions.Default(c)
+		if session == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录"})
+			c.Abort()
+			return
+		}
 		userID := session.Get("user_id")
 		if userID == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录"})
