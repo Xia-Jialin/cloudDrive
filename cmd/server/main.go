@@ -130,6 +130,7 @@ func main() {
 	}))
 
 	redisAddr := viper.GetString("redis.addr")
+	redisUser := viper.GetString("redis.user") // 预留用户名获取
 	redisPassword := viper.GetString("redis.password")
 	redisDB := viper.GetInt("redis.db")
 	redisPoolSize := viper.GetInt("redis.pool_size")
@@ -137,12 +138,13 @@ func main() {
 	// 新增 go-redis/v8 客户端初始化
 	redisClient := goredis.NewClient(&goredis.Options{
 		Addr:     redisAddr,
+		Username: redisUser,
 		Password: redisPassword,
 		DB:       redisDB,
 		PoolSize: redisPoolSize,
 	})
 
-	store, err := redis.NewStoreWithDB(redisPoolSize, "tcp", redisAddr, "", redisPassword, fmt.Sprintf("%d", redisDB), []byte("secret"))
+	store, err := redis.NewStoreWithDB(redisPoolSize, "tcp", redisAddr, redisUser, redisPassword, fmt.Sprintf("%d", redisDB), []byte("secret"))
 	if err != nil {
 		log.Fatalf("Redis session store 初始化失败: %v", err)
 	}
@@ -158,10 +160,22 @@ func main() {
 	// 读取storage配置
 	storageType := viper.GetString("storage.type")
 	localDir := viper.GetString("storage.local_dir")
+	// 读取minio配置
+	minioEndpoint := viper.GetString("storage.minio.endpoint")
+	minioAccessKey := viper.GetString("storage.minio.access_key")
+	minioSecretKey := viper.GetString("storage.minio.secret_key")
+	minioBucket := viper.GetString("storage.minio.bucket")
+	minioUseSSL := viper.GetBool("storage.minio.use_ssl")
 	var storageInst interface{} // 用于注入
 	switch storageType {
 	case "local":
 		storageInst = &storage.LocalFileStorage{Dir: localDir}
+	case "minio":
+		minioInst, err := storage.NewMinioStorage(minioEndpoint, minioAccessKey, minioSecretKey, minioBucket, minioUseSSL)
+		if err != nil {
+			log.Fatalf("Minio 初始化失败: %v", err)
+		}
+		storageInst = minioInst
 	// 未来可扩展更多类型，如oss、ftp等
 	default:
 		log.Fatalf("不支持的存储类型: %s", storageType)

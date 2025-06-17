@@ -10,6 +10,7 @@ database:
 
 redis:
   addr: "localhost:6379"
+  user: ""
   password: ""
   db: 0
   pool_size: 10
@@ -17,3 +18,9 @@ redis:
 storage:
   type: local
   local_dir: uploads 
+  minio:
+    endpoint: "localhost:9000"
+    access_key: "minioadmin"
+    secret_key: "minioadmin"
+    bucket: "clouddrive"
+    use_ssl: false 
