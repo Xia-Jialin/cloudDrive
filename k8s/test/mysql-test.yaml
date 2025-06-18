@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-test
+  labels:
+    app: mysql-test
+spec:
+  ports:
+    - port: 3306
+      targetPort: 3306
+      nodePort: 30306
+  selector:
+    app: mysql-test
+  type: NodePort
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-test
+spec:
+  selector:
+    matchLabels:
+      app: mysql-test
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: mysql-test
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "123456"
+            - name: MYSQL_DATABASE
+              value: "clouddrive"
+          ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: mysql-test-pv
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: mysql-test-pv
+          emptyDir: {} 
