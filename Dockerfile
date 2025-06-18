@@ -16,4 +16,4 @@ VOLUME ["/app/uploads"]
 EXPOSE 8080
 # 支持通过环境变量覆盖配置路径
 ENV CONFIG_PATH=./configs/config.yaml
-CMD ["./server", "-config", "$CONFIG_PATH"] 
+CMD ./server -config "$CONFIG_PATH" 
