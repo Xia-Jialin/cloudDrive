@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-test
+  labels:
+    app: redis-test
+spec:
+  ports:
+    - port: 6379
+      targetPort: 6379
+      nodePort: 30379
+  selector:
+    app: redis-test
+  type: NodePort
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-test
+spec:
+  selector:
+    matchLabels:
+      app: redis-test
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: redis-test
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          ports:
+            - containerPort: 6379
+          command: ["redis-server", "--notify-keyspace-events", "Ex"]
+          volumeMounts:
+            - name: redis-test-pv
+              mountPath: /data
+      volumes:
+        - name: redis-test-pv
+          emptyDir: {} 
