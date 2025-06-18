@@ -5,13 +5,13 @@ metadata:
   labels:
     app: redis-test
 spec:
+  type: NodePort
   ports:
     - port: 6379
       targetPort: 6379
-      nodePort: 30379
+      nodePort: 32381
   selector:
     app: redis-test
-  type: NodePort
 ---
 apiVersion: apps/v1
 kind: Deployment

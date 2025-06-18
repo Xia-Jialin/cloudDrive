@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: etcd
+  labels:
+    app: etcd
+spec:
+  serviceName: etcd
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd
+  template:
+    metadata:
+      labels:
+        app: etcd
+    spec:
+      containers:
+      - name: etcd
+        image: quay.io/coreos/etcd:v3.5.13
+        ports:
+        - containerPort: 2379
+        - containerPort: 2380
+        command:
+        - /usr/local/bin/etcd
+        args:
+        - --name=etcd-0
+        - --data-dir=/etcd-data
+        - --listen-client-urls=http://0.0.0.0:2379
+        - --advertise-client-urls=http://0.0.0.0:2379
+        - --listen-peer-urls=http://0.0.0.0:2380
+        - --initial-advertise-peer-urls=http://0.0.0.0:2380
+        - --initial-cluster=etcd-0=http://0.0.0.0:2380
+        volumeMounts:
+        - name: etcd-data
+          mountPath: /etcd-data
+      volumes:
+      - name: etcd-data
+        persistentVolumeClaim:
+          claimName: etcd-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  labels:
+    app: etcd
+spec:
+  type: NodePort
+  ports:
+    - port: 2379
+      targetPort: 2379
+      nodePort: 32379
+      name: client
+    - port: 2380
+      targetPort: 2380
+      nodePort: 32380
+      name: peer
+  selector:
+    app: etcd
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: etcd-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi 

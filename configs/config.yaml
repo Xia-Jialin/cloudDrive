@@ -2,14 +2,14 @@ database:
   user: root
   password: 123456
   host: 127.0.0.1
-  port: 3306
+  port: 32306
   name: clouddrive
   charset: utf8mb4
   parseTime: true
   loc: Local
 
 redis:
-  addr: "localhost:6379"
+  addr: "localhost:32381"
   user: ""
   password: ""
   db: 0

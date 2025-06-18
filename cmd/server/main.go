@@ -27,6 +27,8 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+
+	goetcd "go.etcd.io/etcd/client/v3"
 )
 
 // @title CloudDrive API
@@ -80,14 +82,59 @@ func StartChunkCleanerCron(redisClient *goredis.Client, baseDir string) {
 	}()
 }
 
+// 新增：从etcd加载配置的函数
+func loadConfigFromEtcd(endpoint, key string) ([]byte, error) {
+	cli, err := goetcd.New(goetcd.Config{
+		Endpoints:   []string{endpoint},
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := cli.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Kvs) == 0 {
+		return nil, fmt.Errorf("key %s not found in etcd", key)
+	}
+	return resp.Kvs[0].Value, nil
+}
+
 func main() {
 	// 支持通过命令行参数指定配置文件路径
 	configPath := flag.String("config", "./configs/config.yaml", "配置文件路径")
+	etcdEndpoint := flag.String("etcd-endpoint", "etcd:2379", "etcd服务地址")
+	etcdKey := flag.String("etcd-key", "clouddrive-server", "etcd配置key")
 	flag.Parse()
 
-	viper.SetConfigFile(*configPath)
-	if err := viper.ReadInConfig(); err != nil {
-		log.Fatalf("读取配置文件失败: %v", err)
+	// 优先用环境变量
+	if env := os.Getenv("ETCD_ENDPOINT"); env != "" {
+		*etcdEndpoint = env
+	}
+	if env := os.Getenv("ETCD_KEY"); env != "" {
+		*etcdKey = env
+	}
+
+	// 优先从etcd加载配置
+	configBytes, err := loadConfigFromEtcd(*etcdEndpoint, *etcdKey)
+	if err != nil {
+		log.Printf("从etcd获取配置失败: %v，尝试读取本地配置文件...", err)
+		viper.SetConfigFile(*configPath)
+		err = viper.ReadInConfig()
+		if err != nil {
+			log.Fatalf("读取配置文件失败: %v", err)
+		}
+	} else {
+		viper.SetConfigType("yaml")
+		err = viper.ReadConfig(strings.NewReader(string(configBytes)))
+		if err != nil {
+			log.Fatalf("解析etcd配置失败: %v", err)
+		}
 	}
 
 	dbUser := viper.GetString("database.user")
@@ -103,11 +150,9 @@ func main() {
 	if parseTime {
 		parseTimeStr = "True"
 	}
-
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=%s&loc=%s",
 		dbUser, dbPassword, dbHost, dbPort, dbName, dbCharset, parseTimeStr, loc)
 
-	var err error
 	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("数据库连接失败: %v", err)

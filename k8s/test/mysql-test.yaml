@@ -5,13 +5,13 @@ metadata:
   labels:
     app: mysql-test
 spec:
+  type: NodePort
   ports:
     - port: 3306
       targetPort: 3306
-      nodePort: 30306
+      nodePort: 32306
   selector:
     app: mysql-test
-  type: NodePort
 ---
 apiVersion: apps/v1
 kind: Deployment
