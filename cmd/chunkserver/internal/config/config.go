@@ -39,6 +39,10 @@ type Config struct {
 			UseSSL    bool   `mapstructure:"use_ssl"`
 		} `mapstructure:"minio"`
 	} `mapstructure:"storage"`
+
+	Security struct {
+		JWTSecret string `mapstructure:"jwt_secret"`
+	} `mapstructure:"security"`
 }
 
 // LoadConfig 从配置文件或ETCD加载配置

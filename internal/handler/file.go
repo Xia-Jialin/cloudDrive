@@ -859,3 +859,253 @@ func MultipartCompleteHandler(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "合并成功"})
 }
+
+// @Summary 获取临时上传URL
+// @Description 获取临时上传URL，前端可直接与存储服务通信
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param parent_id query string false "父目录ID，根目录为空"
+// @Param filename query string true "文件名"
+// @Param size query int64 true "文件大小"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/upload-url [get]
+func GetUploadURLHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	userID := c.MustGet("user_id").(uint)
+	stor := c.MustGet(StorageKey).(storage.Storage)
+
+	filename := c.Query("filename")
+	sizeStr := c.Query("size")
+	parentID := c.DefaultQuery("parent_id", "")
+
+	if filename == "" || sizeStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件名和大小参数必填"})
+		return
+	}
+
+	size, err := strconv.ParseInt(sizeStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件大小格式错误"})
+		return
+	}
+
+	// 检查用户存储空间
+	u, err := user.GetUserByID(db, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取用户信息失败"})
+		return
+	}
+
+	if u.StorageUsed+size > u.StorageLimit {
+		c.JSON(http.StatusForbidden, gin.H{"error": "存储空间不足"})
+		return
+	}
+
+	// 生成唯一的文件ID
+	fileID := uuid.New().String()
+
+	// 准备上传信息
+	uploadInfo := map[string]interface{}{
+		"user_id":   userID,
+		"file_id":   fileID,
+		"filename":  filename,
+		"size":      size,
+		"parent_id": parentID,
+	}
+
+	// 如果存储服务是ChunkServerStorage类型，生成临时上传URL
+	chunkStorage, ok := stor.(*storage.ChunkServerStorage)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "当前存储模式不支持直接上传"})
+		return
+	}
+
+	// 生成上传令牌，有效期30分钟
+	token, err := chunkStorage.GenerateUploadToken(uploadInfo, 30*60)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成上传令牌失败"})
+		return
+	}
+
+	// 将上传信息保存到Redis，用于上传完成后的处理
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
+	infoJson, _ := json.Marshal(uploadInfo)
+	rdb.Set(ctx, "pending_upload:"+fileID, infoJson, 24*time.Hour)
+
+	// 返回临时上传URL和令牌
+	c.JSON(http.StatusOK, gin.H{
+		"upload_url": fmt.Sprintf("%s/upload", chunkStorage.GetBaseURL()),
+		"token":      token,
+		"file_id":    fileID,
+	})
+}
+
+// @Summary 获取临时下载URL
+// @Description 获取临时下载URL，前端可直接与存储服务通信
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param id path string true "文件ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 403 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/download-url/{id} [get]
+func GetDownloadURLHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	userID := c.MustGet("user_id").(uint)
+	stor := c.MustGet(StorageKey).(storage.Storage)
+
+	idStr := c.Param("id")
+
+	// 查询文件信息
+	var f file.File
+	err := db.First(&f, "id = ?", idStr).Error
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+		return
+	}
+
+	// 检查权限
+	if f.OwnerID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权限下载该文件"})
+		return
+	}
+
+	// 如果不是文件类型
+	if f.Type != "file" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "只能下载文件类型"})
+		return
+	}
+
+	// 如果存储服务是ChunkServerStorage类型，生成临时下载URL
+	chunkStorage, ok := stor.(*storage.ChunkServerStorage)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "当前存储模式不支持直接下载"})
+		return
+	}
+
+	// 生成下载令牌，有效期15分钟
+	token, err := chunkStorage.GenerateDownloadToken(f.Hash, f.Name, 15*60)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成下载令牌失败"})
+		return
+	}
+
+	// 返回临时下载URL和令牌
+	c.JSON(http.StatusOK, gin.H{
+		"download_url": fmt.Sprintf("%s/download", chunkStorage.GetBaseURL()),
+		"token":        token,
+		"file_id":      f.Hash,
+		"filename":     f.Name,
+	})
+}
+
+// @Summary 上传完成通知
+// @Description 直接上传完成后的回调通知
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param file_id body string true "文件ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /files/upload-complete [post]
+func UploadCompleteHandler(c *gin.Context) {
+	db := c.MustGet("db").(*gorm.DB)
+	userID := c.MustGet("user_id").(uint)
+
+	var req struct {
+		FileID string `json:"file_id"`
+		Hash   string `json:"hash"`
+		Size   int64  `json:"size"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+
+	// 从Redis获取上传信息
+	rdb := c.MustGet("redis").(*redis.Client)
+	ctx := context.Background()
+	infoJson, err := rdb.Get(ctx, "pending_upload:"+req.FileID).Result()
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "上传信息不存在或已过期"})
+		return
+	}
+
+	// 解析上传信息
+	var uploadInfo map[string]interface{}
+	if err := json.Unmarshal([]byte(infoJson), &uploadInfo); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "解析上传信息失败"})
+		return
+	}
+
+	// 验证用户ID
+	infoUserID := uint(uploadInfo["user_id"].(float64))
+	if infoUserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权限完成此上传"})
+		return
+	}
+
+	// 检查文件内容是否已存在
+	var fileContent file.FileContent
+	err = db.First(&fileContent, "hash = ?", req.Hash).Error
+	if err == gorm.ErrRecordNotFound {
+		fileContent = file.FileContent{
+			Hash: req.Hash,
+			Size: req.Size,
+		}
+		err = db.Create(&fileContent).Error
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库写入失败", "detail": err.Error()})
+			return
+		}
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库查询失败", "detail": err.Error()})
+		return
+	}
+
+	// 创建文件记录
+	f := file.File{
+		Name:       uploadInfo["filename"].(string),
+		Hash:       req.Hash,
+		Type:       "file",
+		ParentID:   uploadInfo["parent_id"].(string),
+		OwnerID:    userID,
+		UploadTime: time.Now(),
+	}
+	if err := db.Create(&f).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库写入失败", "detail": err.Error()})
+		return
+	}
+
+	// 更新用户存储空间
+	if err := user.UpdateUserStorageUsed(db, userID, fileContent.Size); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新存储空间失败", "detail": err.Error()})
+		return
+	}
+
+	// 清理Redis缓存
+	rdb.Del(ctx, "pending_upload:"+req.FileID)
+	cacheKey := fmt.Sprintf("user:info:%d", userID)
+	rdb.Del(ctx, cacheKey)
+	fileListPrefix := fmt.Sprintf("filelist:%d:", userID)
+	keys, _ := rdb.Keys(ctx, fileListPrefix+"*").Result()
+	if len(keys) > 0 {
+		rdb.Del(ctx, keys...)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "上传完成",
+		"file_id": f.ID,
+		"name":    f.Name,
+		"size":    fileContent.Size,
+	})
+}

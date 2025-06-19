@@ -287,6 +287,11 @@ func main() {
 	apiAuth.GET("/files/multipart/status", handler.MultipartStatusHandler)
 	apiAuth.POST("/files/multipart/complete", handler.MultipartCompleteHandler)
 
+	// 添加临时URL API
+	apiAuth.GET("/files/upload-url", handler.GetUploadURLHandler)
+	apiAuth.GET("/files/download-url/:id", handler.GetDownloadURLHandler)
+	apiAuth.POST("/files/upload-complete", handler.UploadCompleteHandler)
+
 	r.POST("/api/share/public", handler.CreatePublicShareHandler)
 	r.GET("/api/share/public", handler.GetPublicShareHandler)
 	r.GET("/api/share/:token", handler.AccessShareHandler)

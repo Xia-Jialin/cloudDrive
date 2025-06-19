@@ -4,14 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
+	"cloudDrive/cmd/chunkserver/internal/config"
 	"cloudDrive/cmd/chunkserver/internal/service"
 	"cloudDrive/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
+	"github.com/golang-jwt/jwt/v4"
 )
 
 // HTTPServer HTTP服务器
@@ -411,4 +417,245 @@ func handleCompleteMultipart(service *service.StorageServiceImpl) gin.HandlerFun
 			},
 		})
 	}
+}
+
+// 直接上传文件处理
+// @Summary 直接上传文件
+// @Description 通过临时令牌直接上传文件
+// @Tags 存储服务
+// @Accept multipart/form-data
+// @Produce json
+// @Param token formData string true "上传令牌"
+// @Param file formData file true "文件"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /upload [post]
+func DirectUploadHandler(c *gin.Context, storageService *service.StorageServiceImpl, cfg *config.Config) {
+	// 获取并验证令牌
+	token := c.PostForm("token")
+	if token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少上传令牌"})
+		return
+	}
+
+	// 解析JWT令牌
+	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+		// 验证签名算法
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(cfg.Security.JWTSecret), nil
+	})
+
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的令牌", "detail": err.Error()})
+		return
+	}
+
+	// 验证令牌有效性
+	claims, ok := parsedToken.Claims.(jwt.MapClaims)
+	if !ok || !parsedToken.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌验证失败"})
+		return
+	}
+
+	// 获取文件信息
+	fileID, ok := claims["file_id"].(string)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "令牌中缺少文件ID"})
+		return
+	}
+
+	// 获取上传文件
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "获取上传文件失败", "detail": err.Error()})
+		return
+	}
+
+	// 检查文件大小
+	size, ok := claims["size"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "令牌中缺少文件大小"})
+		return
+	}
+
+	if file.Size > int64(size) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件大小超过预期"})
+		return
+	}
+
+	// 创建临时目录
+	tempDir := filepath.Join(os.TempDir(), "direct_upload", fileID)
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时目录失败", "detail": err.Error()})
+		return
+	}
+
+	// 保存文件到临时目录
+	tempFilePath := filepath.Join(tempDir, file.Filename)
+	if err := c.SaveUploadedFile(file, tempFilePath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存文件失败", "detail": err.Error()})
+		return
+	}
+
+	// 计算文件哈希
+	hash, err := storageService.CalculateFileHash(tempFilePath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "计算文件哈希失败", "detail": err.Error()})
+		return
+	}
+
+	// 将文件移动到存储位置
+	storagePath := filepath.Join(cfg.Storage.LocalDir, hash[0:2], hash[2:4], hash)
+	if err := os.MkdirAll(filepath.Dir(storagePath), 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建存储目录失败", "detail": err.Error()})
+		return
+	}
+
+	// 如果文件已存在，直接返回成功
+	if _, err := os.Stat(storagePath); err == nil {
+		// 清理临时文件
+		os.RemoveAll(tempDir)
+		c.JSON(http.StatusOK, gin.H{
+			"message": "文件已存在，上传成功",
+			"hash":    hash,
+			"size":    file.Size,
+		})
+		return
+	}
+
+	// 移动文件到存储位置
+	if err := os.Rename(tempFilePath, storagePath); err != nil {
+		// 如果跨设备移动失败，尝试复制
+		if strings.Contains(err.Error(), "cross-device link") {
+			srcFile, err := os.Open(tempFilePath)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "打开源文件失败", "detail": err.Error()})
+				return
+			}
+			defer srcFile.Close()
+
+			dstFile, err := os.Create(storagePath)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "创建目标文件失败", "detail": err.Error()})
+				return
+			}
+			defer dstFile.Close()
+
+			if _, err := io.Copy(dstFile, srcFile); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "复制文件失败", "detail": err.Error()})
+				return
+			}
+
+			// 设置文件权限
+			if err := os.Chmod(storagePath, 0644); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "设置文件权限失败", "detail": err.Error()})
+				return
+			}
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "移动文件失败", "detail": err.Error()})
+			return
+		}
+	}
+
+	// 清理临时目录
+	os.RemoveAll(tempDir)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "上传成功",
+		"hash":    hash,
+		"size":    file.Size,
+	})
+}
+
+// 直接下载文件处理
+// @Summary 直接下载文件
+// @Description 通过临时令牌直接下载文件
+// @Tags 存储服务
+// @Accept json
+// @Produce octet-stream
+// @Param token query string true "下载令牌"
+// @Success 200 {file} file
+// @Failure 400 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /download [get]
+func DirectDownloadHandler(c *gin.Context, storageService *service.StorageServiceImpl, cfg *config.Config) {
+	// 获取并验证令牌
+	token := c.Query("token")
+	if token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少下载令牌"})
+		return
+	}
+
+	// 解析JWT令牌
+	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+		// 验证签名算法
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(cfg.Security.JWTSecret), nil
+	})
+
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的令牌", "detail": err.Error()})
+		return
+	}
+
+	// 验证令牌有效性
+	claims, ok := parsedToken.Claims.(jwt.MapClaims)
+	if !ok || !parsedToken.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌验证失败"})
+		return
+	}
+
+	// 获取文件哈希
+	fileHash, ok := claims["file_hash"].(string)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "令牌中缺少文件哈希"})
+		return
+	}
+
+	// 获取文件名
+	filename, ok := claims["filename"].(string)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "令牌中缺少文件名"})
+		return
+	}
+
+	// 构建文件路径
+	filePath := filepath.Join(cfg.Storage.LocalDir, fileHash[0:2], fileHash[2:4], fileHash)
+
+	// 检查文件是否存在
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+		return
+	}
+
+	// 设置响应头
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
+	c.Header("Content-Type", "application/octet-stream")
+
+	// 发送文件
+	c.File(filePath)
+}
+
+// 注册HTTP路由
+func RegisterHTTPHandlers(r *gin.Engine, storageService *service.StorageServiceImpl, cfg *config.Config) {
+	// ... existing code ...
+
+	// 添加直接上传和下载处理
+	r.POST("/upload", func(c *gin.Context) {
+		DirectUploadHandler(c, storageService, cfg)
+	})
+
+	r.GET("/download", func(c *gin.Context) {
+		DirectDownloadHandler(c, storageService, cfg)
+	})
+
+	// ... existing code ...
 }

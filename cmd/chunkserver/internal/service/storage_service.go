@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"cloudDrive/internal/storage"
 
@@ -25,6 +28,9 @@ type StorageService interface {
 
 	// 验证令牌
 	VerifyToken(ctx context.Context, token string, operation string) (map[string]interface{}, error)
+
+	// 计算文件哈希
+	CalculateFileHash(filePath string) (string, error)
 }
 
 // StorageServiceImpl 存储服务实现
@@ -94,4 +100,21 @@ func (s *StorageServiceImpl) VerifyToken(ctx context.Context, token string, oper
 	}
 
 	return tokenInfo, nil
+}
+
+// CalculateFileHash 计算文件的SHA256哈希值
+func (s *StorageServiceImpl) CalculateFileHash(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("打开文件失败: %v", err)
+	}
+	defer file.Close()
+
+	// 使用SHA256算法
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("计算哈希失败: %v", err)
+	}
+
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
