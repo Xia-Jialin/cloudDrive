@@ -32,6 +32,7 @@ services:
     depends_on:
       - mysql
       - redis
+      - chunkserver
     environment:
       # 覆盖 config.yaml 主要参数
       CONFIG_PATH: ./configs/config.yaml
@@ -39,7 +40,23 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./cmd/server/uploads:/app/uploads
+      - ./configs:/app/configs
+
+  chunkserver:
+    build:
+      context: .
+      dockerfile: ./cmd/chunkserver/Dockerfile
+    container_name: clouddrive-chunkserver
+    restart: always
+    depends_on:
+      - redis
+    environment:
+      CONFIG_PATH: ./configs/chunkserver.yaml
+    ports:
+      - "8081:8081"
+      - "9000:9000"
+    volumes:
+      - chunkserver_data:/app/uploads
       - ./configs:/app/configs
 
   web:
@@ -56,4 +73,5 @@ services:
 
 volumes:
   mysql_data:
-  redis_data: 
+  redis_data:
+  chunkserver_data: 

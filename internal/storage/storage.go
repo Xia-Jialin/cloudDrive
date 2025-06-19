@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"io"
 )
 
@@ -11,20 +12,33 @@ type FileInfo struct {
 	Content []byte
 }
 
-// Storage 定义通用的key/value存储接口
-// Save 保存内容到指定key
-// Read 读取指定key的内容
-// Delete 删除指定key的内容
+// PartInfo 表示分片信息
+type PartInfo struct {
+	PartNumber int    `json:"part_number"`
+	ETag       string `json:"etag"`
+}
+
+// Storage 定义通用的存储接口
 type Storage interface {
+	// 基本文件操作
+	Upload(ctx context.Context, fileID string, reader io.Reader) error
+	Download(ctx context.Context, fileID string) (io.ReadCloser, error)
+	Delete(ctx context.Context, fileID string) error
+
+	// 分片上传相关方法
+	InitMultipartUpload(ctx context.Context, fileID string, filename string) (string, error)
+	UploadPart(ctx context.Context, uploadID string, partNumber int, partData io.Reader) (string, error)
+	CompleteMultipartUpload(ctx context.Context, uploadID string, parts []PartInfo) (string, error)
+	ListUploadedParts(ctx context.Context, uploadID string) ([]int, error)
+}
+
+// 兼容旧版接口的方法
+type LegacyStorage interface {
 	Save(key string, content io.Reader) error
 	Read(key string) ([]byte, error)
 	Delete(key string) error
-}
 
-// MultipartStorage 定义分片上传相关接口
-// uploadId: 本次分片上传唯一标识，partNumber: 分片序号，data: 分片内容
-// totalParts: 总分片数，targetKey: 合并后目标文件key
-type MultipartStorage interface {
+	// 旧版分片上传相关方法
 	SavePart(uploadId string, partNumber int, data []byte) error
 	MergeParts(uploadId string, totalParts int, targetKey string) error
 	ListUploadedParts(uploadId string) ([]int, error)

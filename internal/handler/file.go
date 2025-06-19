@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"cloudDrive/internal/file"
 	"cloudDrive/internal/storage"
 	"cloudDrive/internal/user"
@@ -23,6 +24,9 @@ import (
 	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
 )
+
+// StorageKey 用于在gin上下文中获取存储服务实例的键
+const StorageKey = "storage"
 
 // @Summary 获取文件/文件夹列表
 // @Description 获取指定目录下的文件和文件夹，支持分页和排序，需登录（Session）
@@ -94,11 +98,11 @@ func FileListHandler(c *gin.Context) {
 	c.Data(http.StatusOK, "application/json", jsonBytes)
 }
 
-// StorageKey 用于gin.Context注入storage依赖
-const StorageKey = "storage"
-
 // Storage实例获取函数（可根据实际情况注入或配置）
 func getStorage() storage.Storage {
+	// 这里应该从配置中获取存储服务的类型和配置
+	// 由于我们没有Redis客户端，这里返回一个LocalFileStorage实例
+	// 在实际应用中，应该使用正确配置的ChunkServerStorage
 	return &storage.LocalFileStorage{Dir: "uploads"}
 }
 
@@ -167,7 +171,7 @@ func FileUploadHandler(c *gin.Context) {
 	err = db.First(&fileContent, "hash = ?", hashStr).Error
 	if err == gorm.ErrRecordNotFound {
 		tmpFile.Seek(0, 0)
-		err = stor.Save(hashStr, tmpFile)
+		err = stor.Upload(context.Background(), hashStr, tmpFile)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "文件保存失败", "detail": err.Error()})
 			return
@@ -205,7 +209,7 @@ func FileUploadHandler(c *gin.Context) {
 	}
 	if u.StorageUsed+fileContent.Size > u.StorageLimit {
 		if err := db.Delete(&f).Error; err == nil {
-			_ = stor.Delete(hashStr)
+			_ = stor.Delete(context.Background(), hashStr)
 		}
 		c.JSON(http.StatusForbidden, gin.H{"error": "存储空间不足"})
 		return
@@ -635,7 +639,13 @@ func MultipartInitHandler(c *gin.Context) {
 		return
 	}
 	// 正常分片上传流程
-	uploadId := uuid.New().String()
+	stor := c.MustGet(StorageKey).(storage.Storage)
+	uploadId, err := stor.InitMultipartUpload(context.Background(), req.Hash, req.Name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "初始化分片上传失败", "detail": err.Error()})
+		return
+	}
+
 	rdb := c.MustGet("redis").(*redis.Client)
 	ctx := context.Background()
 	info := map[string]interface{}{
@@ -662,7 +672,7 @@ func MultipartInitHandler(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /files/multipart/upload [post]
 func MultipartUploadPartHandler(c *gin.Context) {
-	stor := getStorage().(storage.MultipartStorage)
+	stor := c.MustGet(StorageKey).(storage.Storage)
 	uploadId := c.PostForm("upload_id")
 	partNumberStr := c.PostForm("part_number")
 	partNumber, err := strconv.Atoi(partNumberStr)
@@ -692,7 +702,8 @@ func MultipartUploadPartHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "分片读取失败"})
 		return
 	}
-	if err := stor.SavePart(uploadId, partNumber, data); err != nil {
+	_, err = stor.UploadPart(context.Background(), uploadId, partNumber, bytes.NewReader(data))
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "分片保存失败", "detail": err.Error()})
 		return
 	}
@@ -708,7 +719,7 @@ func MultipartUploadPartHandler(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /files/multipart/status [get]
 func MultipartStatusHandler(c *gin.Context) {
-	stor := getStorage().(storage.MultipartStorage)
+	stor := c.MustGet(StorageKey).(storage.Storage)
 	uploadId := c.Query("upload_id")
 	if uploadId == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -719,7 +730,7 @@ func MultipartStatusHandler(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权限或uploadId无效"})
 		return
 	}
-	parts, err := stor.ListUploadedParts(uploadId)
+	parts, err := stor.ListUploadedParts(context.Background(), uploadId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败", "detail": err.Error()})
 		return
@@ -738,7 +749,7 @@ func MultipartStatusHandler(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /files/multipart/complete [post]
 func MultipartCompleteHandler(c *gin.Context) {
-	stor := getStorage().(storage.MultipartStorage)
+	stor := c.MustGet(StorageKey).(storage.Storage)
 	db := c.MustGet("db").(*gorm.DB)
 	userID := c.MustGet("user_id").(uint)
 	var req struct {
@@ -771,7 +782,16 @@ func MultipartCompleteHandler(c *gin.Context) {
 		return
 	}
 	// ========================
-	if err := stor.MergeParts(req.UploadId, req.TotalParts, req.TargetKey); err != nil {
+	// 生成分片信息列表
+	parts := make([]storage.PartInfo, req.TotalParts)
+	for i := 0; i < req.TotalParts; i++ {
+		parts[i] = storage.PartInfo{
+			PartNumber: i + 1,
+			ETag:       "", // 这里可能需要实际的ETag值，但我们暂时不需要
+		}
+	}
+	_, err = stor.CompleteMultipartUpload(context.Background(), req.UploadId, parts)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "合并失败", "detail": err.Error()})
 		return
 	}

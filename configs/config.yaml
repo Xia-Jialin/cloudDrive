@@ -24,3 +24,7 @@ storage:
     secret_key: "minioadmin"
     bucket: "clouddrive"
     use_ssl: false 
+  chunk_server:
+    enabled: false
+    url: "http://localhost:8081"
+    temp_dir: "/tmp/chunk_client" 

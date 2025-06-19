@@ -1,0 +1,21 @@
+server:
+  grpc_port: 9000
+  http_port: 8081
+  upload_max_size: 1073741824  # 1GB
+
+redis:
+  addr: "localhost:32381"
+  user: ""
+  password: ""
+  db: 0
+  pool_size: 10
+
+storage:
+  type: local
+  local_dir: "cmd/chunkserver/uploads"
+  minio:
+    endpoint: "localhost:9000"
+    access_key: "minioadmin"
+    secret_key: "minioadmin"
+    bucket: "clouddrive"
+    use_ssl: false 

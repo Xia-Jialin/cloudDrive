@@ -211,19 +211,49 @@ func main() {
 	minioSecretKey := viper.GetString("storage.minio.secret_key")
 	minioBucket := viper.GetString("storage.minio.bucket")
 	minioUseSSL := viper.GetBool("storage.minio.use_ssl")
-	var storageInst interface{} // 用于注入
-	switch storageType {
-	case "local":
-		storageInst = &storage.LocalFileStorage{Dir: localDir}
-	case "minio":
-		minioInst, err := storage.NewMinioStorage(minioEndpoint, minioAccessKey, minioSecretKey, minioBucket, minioUseSSL)
-		if err != nil {
-			log.Fatalf("Minio 初始化失败: %v", err)
+
+	// 读取块存储服务配置
+	chunkServerEnabled := viper.GetBool("storage.chunk_server.enabled")
+	chunkServerURL := viper.GetString("storage.chunk_server.url")
+	chunkServerTempDir := viper.GetString("storage.chunk_server.temp_dir")
+
+	var storageInst storage.Storage // 用于注入
+
+	if chunkServerEnabled {
+		// 使用块存储服务
+		log.Println("使用块存储服务模式")
+
+		// 确保临时目录存在
+		if chunkServerTempDir == "" {
+			chunkServerTempDir = filepath.Join(os.TempDir(), "chunk_client")
 		}
-		storageInst = minioInst
-	// 未来可扩展更多类型，如oss、ftp等
-	default:
-		log.Fatalf("不支持的存储类型: %s", storageType)
+		if err := os.MkdirAll(chunkServerTempDir, 0755); err != nil {
+			log.Fatalf("创建块存储服务临时目录失败: %v", err)
+		}
+
+		// 初始化块存储服务客户端
+		chunkStorage, err := storage.NewChunkServerStorage(chunkServerURL, redisClient, chunkServerTempDir)
+		if err != nil {
+			log.Fatalf("初始化块存储服务客户端失败: %v", err)
+		}
+
+		storageInst = chunkStorage
+		log.Printf("已连接到块存储服务: %s", chunkServerURL)
+	} else {
+		// 使用本地存储或MinIO
+		switch storageType {
+		case "local":
+			storageInst = &storage.LocalFileStorage{Dir: localDir}
+		case "minio":
+			minioInst, err := storage.NewMinioStorage(minioEndpoint, minioAccessKey, minioSecretKey, minioBucket, minioUseSSL)
+			if err != nil {
+				log.Fatalf("Minio 初始化失败: %v", err)
+			}
+			storageInst = minioInst
+		// 未来可扩展更多类型，如oss、ftp等
+		default:
+			log.Fatalf("不支持的存储类型: %s", storageType)
+		}
 	}
 
 	// 注入 db、redis、storage 到 gin.Context
