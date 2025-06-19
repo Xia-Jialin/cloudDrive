@@ -39,49 +39,6 @@ import (
 
 var db *gorm.DB
 
-// Redis事件驱动分片清理
-func StartChunkCleaner(redisClient *goredis.Client, baseDir string) {
-	ctx := context.Background()
-	pubsub := redisClient.PSubscribe(ctx, "__keyevent@0__:expired")
-	log.Println("分片清理监听已启动...")
-	for msg := range pubsub.Channel() {
-		if strings.HasPrefix(msg.Payload, "upload:") {
-			uploadId := strings.TrimPrefix(msg.Payload, "upload:")
-			chunkDir := filepath.Join(baseDir, "multipart", uploadId)
-			if err := os.RemoveAll(chunkDir); err == nil {
-				log.Printf("已自动清理分片目录: %s\n", chunkDir)
-			}
-		}
-	}
-}
-
-// 定时兜底分片清理
-func CleanOrphanChunks(redisClient *goredis.Client, baseDir string) {
-	ctx := context.Background()
-	multipartDir := filepath.Join(baseDir, "multipart")
-	entries, _ := os.ReadDir(multipartDir)
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		uploadId := entry.Name()
-		exists, _ := redisClient.Exists(ctx, "upload:"+uploadId).Result()
-		if exists == 0 {
-			os.RemoveAll(filepath.Join(multipartDir, uploadId))
-			log.Printf("定时兜底清理分片目录: %s\n", filepath.Join(multipartDir, uploadId))
-		}
-	}
-}
-
-func StartChunkCleanerCron(redisClient *goredis.Client, baseDir string) {
-	go func() {
-		for {
-			CleanOrphanChunks(redisClient, baseDir)
-			time.Sleep(12 * time.Hour)
-		}
-	}()
-}
-
 // 新增：从etcd加载配置的函数
 func loadConfigFromEtcd(endpoint, key string) ([]byte, error) {
 	cli, err := goetcd.New(goetcd.Config{
@@ -202,16 +159,6 @@ func main() {
 	})
 	r.Use(sessions.Sessions("cloudsession", store))
 
-	// 读取storage配置
-	storageType := viper.GetString("storage.type")
-	localDir := viper.GetString("storage.local_dir")
-	// 读取minio配置
-	minioEndpoint := viper.GetString("storage.minio.endpoint")
-	minioAccessKey := viper.GetString("storage.minio.access_key")
-	minioSecretKey := viper.GetString("storage.minio.secret_key")
-	minioBucket := viper.GetString("storage.minio.bucket")
-	minioUseSSL := viper.GetBool("storage.minio.use_ssl")
-
 	// 读取块存储服务配置
 	chunkServerEnabled := viper.GetBool("storage.chunk_server.enabled")
 	chunkServerURL := viper.GetString("storage.chunk_server.url")
@@ -219,42 +166,26 @@ func main() {
 
 	var storageInst storage.Storage // 用于注入
 
-	if chunkServerEnabled {
-		// 使用块存储服务
-		log.Println("使用块存储服务模式")
-
-		// 确保临时目录存在
-		if chunkServerTempDir == "" {
-			chunkServerTempDir = filepath.Join(os.TempDir(), "chunk_client")
-		}
-		if err := os.MkdirAll(chunkServerTempDir, 0755); err != nil {
-			log.Fatalf("创建块存储服务临时目录失败: %v", err)
-		}
-
-		// 初始化块存储服务客户端
-		chunkStorage, err := storage.NewChunkServerStorage(chunkServerURL, redisClient, chunkServerTempDir)
-		if err != nil {
-			log.Fatalf("初始化块存储服务客户端失败: %v", err)
-		}
-
-		storageInst = chunkStorage
-		log.Printf("已连接到块存储服务: %s", chunkServerURL)
-	} else {
-		// 使用本地存储或MinIO
-		switch storageType {
-		case "local":
-			storageInst = &storage.LocalFileStorage{Dir: localDir}
-		case "minio":
-			minioInst, err := storage.NewMinioStorage(minioEndpoint, minioAccessKey, minioSecretKey, minioBucket, minioUseSSL)
-			if err != nil {
-				log.Fatalf("Minio 初始化失败: %v", err)
-			}
-			storageInst = minioInst
-		// 未来可扩展更多类型，如oss、ftp等
-		default:
-			log.Fatalf("不支持的存储类型: %s", storageType)
-		}
+	if !chunkServerEnabled {
+		log.Fatalf("必须启用块存储服务，请在配置文件中设置 storage.chunk_server.enabled=true")
 	}
+
+	// 确保临时目录存在
+	if chunkServerTempDir == "" {
+		chunkServerTempDir = filepath.Join(os.TempDir(), "chunk_client")
+	}
+	if err := os.MkdirAll(chunkServerTempDir, 0755); err != nil {
+		log.Fatalf("创建块存储服务临时目录失败: %v", err)
+	}
+
+	// 初始化块存储服务客户端
+	chunkStorage, err := storage.NewChunkServerStorage(chunkServerURL, redisClient, chunkServerTempDir)
+	if err != nil {
+		log.Fatalf("初始化块存储服务客户端失败: %v", err)
+	}
+
+	storageInst = chunkStorage
+	log.Printf("已连接到块存储服务: %s", chunkServerURL)
 
 	// 注入 db、redis、storage 到 gin.Context
 	r.Use(func(c *gin.Context) {
@@ -306,10 +237,6 @@ func main() {
 	apiAuth.DELETE("/recycle", handler.RecycleBinDeleteHandler)
 
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
-
-	// 新增分片清理监听和定时兜底
-	go StartChunkCleaner(redisClient, localDir)
-	StartChunkCleanerCron(redisClient, localDir)
 
 	r.Run(":8080")
 }
