@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-test
+  labels:
+    app: minio-test
+spec:
+  type: NodePort
+  ports:
+    - port: 9000
+      targetPort: 9000
+      nodePort: 32700
+      name: api
+    - port: 9001
+      targetPort: 9001
+      nodePort: 32701
+      name: console
+  selector:
+    app: minio-test
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio-test
+spec:
+  selector:
+    matchLabels:
+      app: minio-test
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: minio-test
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          env:
+            - name: MINIO_ROOT_USER
+              value: "minioadmin"
+            - name: MINIO_ROOT_PASSWORD
+              value: "minioadmin"
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          volumeMounts:
+            - name: minio-test-pv
+              mountPath: /data
+      volumes:
+        - name: minio-test-pv
+          persistentVolumeClaim:
+            claimName: minio-test-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-test-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi 

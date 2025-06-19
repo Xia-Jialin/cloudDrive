@@ -32,10 +32,22 @@ spec:
           image: redis:7.2-alpine
           ports:
             - containerPort: 6379
-          command: ["redis-server", "--notify-keyspace-events", "Ex"]
+          command: ["redis-server", "--notify-keyspace-events", "Ex", "--appendonly", "yes"]
           volumeMounts:
             - name: redis-test-pv
               mountPath: /data
       volumes:
         - name: redis-test-pv
-          emptyDir: {} 
+          persistentVolumeClaim:
+            claimName: redis-test-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-test-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi 

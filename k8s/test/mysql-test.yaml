@@ -42,4 +42,16 @@ spec:
               mountPath: /var/lib/mysql
       volumes:
         - name: mysql-test-pv
-          emptyDir: {} 
+          persistentVolumeClaim:
+            claimName: mysql-test-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-test-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi 
