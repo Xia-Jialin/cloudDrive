@@ -1,36 +1,43 @@
-FROM golang:1.18-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
+# 设置工作目录
 WORKDIR /app
+
+# 安装依赖
+RUN apk add --no-cache git
 
 # 复制go.mod和go.sum
 COPY go.mod go.sum ./
-RUN go mod download
+# RUN go mod download
 
 # 复制源代码
 COPY . .
 
-# 编译
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o chunkserver ./cmd/chunkserver
+# 编译块存储服务
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o chunkserver cmd/chunkserver/main.go
 
+# 使用轻量级的alpine镜像
 FROM alpine:latest
 
-WORKDIR /app
-
-# 安装基础工具
+# 安装必要的运行时依赖
 RUN apk --no-cache add ca-certificates tzdata
 
-# 设置时区
-ENV TZ=Asia/Shanghai
+# 设置工作目录
+WORKDIR /app
 
-# 从builder阶段复制编译好的应用
-COPY --from=builder /app/chunkserver .
-COPY --from=builder /app/configs/chunkserver.yaml ./configs/chunkserver.yaml
+# 从builder阶段复制编译好的二进制文件
+COPY --from=builder /app/chunkserver /app/
+COPY --from=builder /app/configs/chunkserver.yaml /app/configs/
 
 # 创建上传目录
-RUN mkdir -p /app/uploads/multipart
+RUN mkdir -p /app/uploads
 
-# 暴露端口
+# 暴露HTTP和gRPC端口
 EXPOSE 8081 9000
 
-# 运行应用
-CMD ["./chunkserver"] 
+# 设置环境变量
+ENV ETCD_ENDPOINT="etcd:2379"
+ENV ETCD_KEY="/clouddrive/chunkserver/config"
+
+# 启动命令
+CMD ["/app/chunkserver", "--config", "/app/configs/chunkserver.yaml"] 

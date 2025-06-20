@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"cloudDrive/cmd/chunkserver/internal/config"
 	"cloudDrive/cmd/chunkserver/internal/service"
@@ -17,7 +15,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
-	"github.com/golang-jwt/jwt/v4"
 )
 
 // HTTPServer HTTP服务器
@@ -41,6 +38,24 @@ func NewHTTPServer(service *service.StorageServiceImpl, redis *redis.Client, por
 	router.POST("/multipart/upload", handleUploadPart(service))
 	router.POST("/multipart/complete", handleCompleteMultipart(service))
 
+	// API路由组
+	apiGroup := router.Group("/api")
+	{
+		// 健康检查端点
+		apiGroup.GET("/health", handleHealthCheck(redis))
+
+		// 文件操作API
+		apiGroup.POST("/file/:id", handleFileUpload(service))
+		apiGroup.GET("/file/:id", handleFileDownload(service))
+		apiGroup.DELETE("/file/:id", handleFileDelete(service))
+
+		// 分片上传API
+		apiGroup.POST("/multipart/init", handleInitMultipart(service))
+		apiGroup.POST("/multipart/part", handleUploadPart(service))
+		apiGroup.GET("/multipart/status", handleMultipartStatus(service))
+		apiGroup.POST("/multipart/complete", handleCompleteMultipart(service))
+	}
+
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: router,
@@ -61,6 +76,428 @@ func (s *HTTPServer) Start() error {
 // Shutdown 关闭HTTP服务器
 func (s *HTTPServer) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
+}
+
+// 健康检查处理函数
+func handleHealthCheck(redisClient *redis.Client) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		health := map[string]interface{}{
+			"status": "ok",
+			"time":   time.Now().Format(time.RFC3339),
+		}
+
+		// 检查Redis连接
+		if redisClient != nil {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+			defer cancel()
+
+			err := redisClient.Ping(ctx).Err()
+			if err != nil {
+				health["redis_status"] = "error"
+				health["redis_error"] = err.Error()
+				health["status"] = "degraded"
+			} else {
+				health["redis_status"] = "ok"
+			}
+		}
+
+		if health["status"] == "ok" {
+			c.JSON(http.StatusOK, health)
+		} else {
+			c.JSON(http.StatusServiceUnavailable, health)
+		}
+	}
+}
+
+// 处理文件上传
+func handleFileUpload(service *service.StorageServiceImpl) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		fileID := c.Param("id")
+		if fileID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    1,
+				"message": "文件ID不能为空",
+			})
+			return
+		}
+
+		// 获取上传文件
+		file, err := c.FormFile("file")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    3,
+				"message": fmt.Sprintf("获取文件失败: %v", err),
+			})
+			return
+		}
+
+		// 打开文件
+		f, err := file.Open()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    4,
+				"message": fmt.Sprintf("打开文件失败: %v", err),
+			})
+			return
+		}
+		defer f.Close()
+
+		// 保存文件
+		if err := service.Save(c.Request.Context(), fileID, f); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    6,
+				"message": fmt.Sprintf("保存文件失败: %v", err),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    0,
+			"message": "上传成功",
+			"data": gin.H{
+				"file_id": fileID,
+				"size":    file.Size,
+			},
+		})
+	}
+}
+
+// 处理文件下载
+func handleFileDownload(service *service.StorageServiceImpl) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		fileID := c.Param("id")
+		if fileID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    1,
+				"message": "文件ID不能为空",
+			})
+			return
+		}
+
+		// 读取文件内容
+		data, err := service.Read(c.Request.Context(), fileID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    4,
+				"message": fmt.Sprintf("读取文件失败: %v", err),
+			})
+			return
+		}
+
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", fileID))
+		c.Data(http.StatusOK, "application/octet-stream", data)
+	}
+}
+
+// 处理文件删除
+func handleFileDelete(service *service.StorageServiceImpl) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		fileID := c.Param("id")
+		if fileID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    1,
+				"message": "文件ID不能为空",
+			})
+			return
+		}
+
+		// 删除文件
+		if err := service.Delete(c.Request.Context(), fileID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    4,
+				"message": fmt.Sprintf("删除文件失败: %v", err),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    0,
+			"message": "删除成功",
+		})
+	}
+}
+
+// 处理初始化分片上传请求
+func handleInitMultipart(service *service.StorageServiceImpl) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 支持两种请求方式：查询参数和JSON请求体
+		var filename, token string
+		var fileID string
+
+		// 检查是否是JSON请求
+		contentType := c.GetHeader("Content-Type")
+		if strings.Contains(contentType, "application/json") {
+			// 处理JSON请求体
+			var req struct {
+				FileID     string `json:"file_id"`
+				Filename   string `json:"filename"`
+				Name       string `json:"name"`
+				Size       int64  `json:"size"`
+				Hash       string `json:"hash"`
+				TotalParts int    `json:"total_parts"`
+				ParentID   string `json:"parent_id"`
+			}
+
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    1,
+					"message": "无效的请求参数",
+				})
+				return
+			}
+
+			// 优先使用file_id和filename字段
+			if req.FileID != "" {
+				fileID = req.FileID
+			} else {
+				fileID = req.Hash // 兼容旧版本
+			}
+
+			if req.Filename != "" {
+				filename = req.Filename
+			} else {
+				filename = req.Name // 兼容旧版本
+			}
+
+			// 对于JSON请求，我们不需要token，因为这是从主服务器发来的内部请求
+			// 生成一个临时token
+			token = fmt.Sprintf("internal_%s", fileID)
+
+			// 将token保存到Redis，以便后续验证
+			ctx := context.Background()
+			tokenKey := fmt.Sprintf("chunk:token:%s", token)
+			service.GetRedisClient().Set(ctx, tokenKey, fileID, 24*time.Hour)
+		} else {
+			// 处理查询参数
+			filename = c.Query("filename")
+			token = c.Query("token")
+
+			if filename == "" || token == "" {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    1,
+					"message": "filename和token参数必填",
+				})
+				return
+			}
+
+			// 验证令牌
+			tokenInfo, err := service.VerifyToken(c.Request.Context(), token, "multipart_init")
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    2,
+					"message": err.Error(),
+				})
+				return
+			}
+
+			// 获取文件ID
+			var ok bool
+			fileID, ok = tokenInfo["file_id"].(string)
+			if !ok || fileID == "" {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    3,
+					"message": "无效的文件ID",
+				})
+				return
+			}
+		}
+
+		// 初始化分片上传
+		uploadID, err := service.InitMultipartUpload(c.Request.Context(), fileID, filename)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    4,
+				"message": fmt.Sprintf("初始化分片上传失败: %v", err),
+			})
+			return
+		}
+
+		// 获取服务器的公共URL
+		// 优先从请求的Host头获取
+		serverURL := c.Request.Header.Get("X-Forwarded-Host")
+		if serverURL == "" {
+			serverURL = c.Request.Host
+		}
+
+		// 构建完整的URL
+		scheme := "http"
+		if c.Request.TLS != nil {
+			scheme = "https"
+		}
+		publicURL := fmt.Sprintf("%s://%s", scheme, serverURL)
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    0,
+			"message": "初始化成功",
+			"data": gin.H{
+				"upload_id":  uploadID,
+				"server_url": publicURL, // 返回服务器URL
+			},
+		})
+	}
+}
+
+// 处理上传分片请求
+func handleUploadPart(service *service.StorageServiceImpl) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uploadID := c.PostForm("upload_id")
+		partNumberStr := c.PostForm("part_number")
+		token := c.PostForm("token")
+
+		if uploadID == "" || partNumberStr == "" || token == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    1,
+				"message": "upload_id、part_number和token参数必填",
+			})
+			return
+		}
+
+		partNumber, err := strconv.Atoi(partNumberStr)
+		if err != nil || partNumber <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    2,
+				"message": "part_number参数无效",
+			})
+			return
+		}
+
+		// 验证令牌
+		_, err = service.VerifyToken(c.Request.Context(), token, "multipart_upload")
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    3,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		// 获取分片文件
+		file, err := c.FormFile("part")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    4,
+				"message": fmt.Sprintf("获取分片失败: %v", err),
+			})
+			return
+		}
+
+		// 打开分片文件
+		f, err := file.Open()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    5,
+				"message": fmt.Sprintf("打开分片失败: %v", err),
+			})
+			return
+		}
+		defer f.Close()
+
+		// 上传分片
+		etag, err := service.UploadPart(c.Request.Context(), uploadID, partNumber, f)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    6,
+				"message": fmt.Sprintf("上传分片失败: %v", err),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    0,
+			"message": "上传分片成功",
+			"data": gin.H{
+				"etag": etag,
+			},
+		})
+	}
+}
+
+// 处理完成分片上传请求
+func handleCompleteMultipart(service *service.StorageServiceImpl) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uploadID := c.PostForm("upload_id")
+		partsJSON := c.PostForm("parts")
+		token := c.PostForm("token")
+
+		if uploadID == "" || partsJSON == "" || token == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    1,
+				"message": "upload_id、parts和token参数必填",
+			})
+			return
+		}
+
+		// 验证令牌
+		_, err := service.VerifyToken(c.Request.Context(), token, "multipart_complete")
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    2,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		// 解析分片信息
+		var parts []storage.PartInfo
+		if err := json.Unmarshal([]byte(partsJSON), &parts); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    3,
+				"message": fmt.Sprintf("解析分片信息失败: %v", err),
+			})
+			return
+		}
+
+		// 完成分片上传
+		fileID, err := service.CompleteMultipartUpload(c.Request.Context(), uploadID, parts)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    4,
+				"message": fmt.Sprintf("完成分片上传失败: %v", err),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    0,
+			"message": "完成分片上传成功",
+			"data": gin.H{
+				"file_id": fileID,
+			},
+		})
+	}
+}
+
+// 处理分片上传状态查询
+func handleMultipartStatus(service *service.StorageServiceImpl) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uploadID := c.Query("upload_id")
+		if uploadID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    1,
+				"message": "upload_id参数必填",
+			})
+			return
+		}
+
+		// 获取已上传的分片
+		parts, err := service.ListParts(c.Request.Context(), uploadID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    2,
+				"message": fmt.Sprintf("获取分片状态失败: %v", err),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    0,
+			"message": "获取成功",
+			"data": gin.H{
+				"upload_id": uploadID,
+				"parts":     parts,
+			},
+		})
+	}
 }
 
 // 处理直接上传请求
@@ -235,427 +672,13 @@ func handleDirectDelete(service *service.StorageServiceImpl) gin.HandlerFunc {
 	}
 }
 
-// 处理初始化分片上传请求
-func handleInitMultipart(service *service.StorageServiceImpl) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		filename := c.Query("filename")
-		token := c.Query("token")
-
-		if filename == "" || token == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    1,
-				"message": "filename和token参数必填",
-			})
-			return
-		}
-
-		// 验证令牌
-		tokenInfo, err := service.VerifyToken(c.Request.Context(), token, "multipart_init")
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    2,
-				"message": err.Error(),
-			})
-			return
-		}
-
-		// 获取文件ID
-		fileID, ok := tokenInfo["file_id"].(string)
-		if !ok || fileID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    3,
-				"message": "无效的文件ID",
-			})
-			return
-		}
-
-		// 初始化分片上传
-		uploadID, err := service.InitMultipartUpload(c.Request.Context(), fileID, filename)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":    4,
-				"message": fmt.Sprintf("初始化分片上传失败: %v", err),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"code":    0,
-			"message": "初始化成功",
-			"data": gin.H{
-				"upload_id": uploadID,
-			},
-		})
-	}
-}
-
-// 处理上传分片请求
-func handleUploadPart(service *service.StorageServiceImpl) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		uploadID := c.PostForm("upload_id")
-		partNumberStr := c.PostForm("part_number")
-		token := c.PostForm("token")
-
-		if uploadID == "" || partNumberStr == "" || token == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    1,
-				"message": "upload_id、part_number和token参数必填",
-			})
-			return
-		}
-
-		partNumber, err := strconv.Atoi(partNumberStr)
-		if err != nil || partNumber <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    2,
-				"message": "part_number参数无效",
-			})
-			return
-		}
-
-		// 验证令牌
-		_, err = service.VerifyToken(c.Request.Context(), token, "multipart_upload")
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    3,
-				"message": err.Error(),
-			})
-			return
-		}
-
-		// 获取分片文件
-		file, err := c.FormFile("part")
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    4,
-				"message": fmt.Sprintf("获取分片失败: %v", err),
-			})
-			return
-		}
-
-		// 打开分片文件
-		f, err := file.Open()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":    5,
-				"message": fmt.Sprintf("打开分片失败: %v", err),
-			})
-			return
-		}
-		defer f.Close()
-
-		// 上传分片
-		etag, err := service.UploadPart(c.Request.Context(), uploadID, partNumber, f)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":    6,
-				"message": fmt.Sprintf("上传分片失败: %v", err),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"code":    0,
-			"message": "上传分片成功",
-			"data": gin.H{
-				"etag": etag,
-			},
-		})
-	}
-}
-
-// 处理完成分片上传请求
-func handleCompleteMultipart(service *service.StorageServiceImpl) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		uploadID := c.PostForm("upload_id")
-		partsJSON := c.PostForm("parts")
-		token := c.PostForm("token")
-
-		if uploadID == "" || partsJSON == "" || token == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    1,
-				"message": "upload_id、parts和token参数必填",
-			})
-			return
-		}
-
-		// 验证令牌
-		_, err := service.VerifyToken(c.Request.Context(), token, "multipart_complete")
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    2,
-				"message": err.Error(),
-			})
-			return
-		}
-
-		// 解析分片信息
-		var parts []storage.PartInfo
-		if err := json.Unmarshal([]byte(partsJSON), &parts); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    3,
-				"message": fmt.Sprintf("解析分片信息失败: %v", err),
-			})
-			return
-		}
-
-		// 完成分片上传
-		fileID, err := service.CompleteMultipartUpload(c.Request.Context(), uploadID, parts)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":    4,
-				"message": fmt.Sprintf("完成分片上传失败: %v", err),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"code":    0,
-			"message": "完成分片上传成功",
-			"data": gin.H{
-				"file_id": fileID,
-			},
-		})
-	}
-}
-
-// 直接上传文件处理
-// @Summary 直接上传文件
-// @Description 通过临时令牌直接上传文件
-// @Tags 存储服务
-// @Accept multipart/form-data
-// @Produce json
-// @Param token formData string true "上传令牌"
-// @Param file formData file true "文件"
-// @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} map[string]interface{}
-// @Failure 401 {object} map[string]interface{}
-// @Failure 500 {object} map[string]interface{}
-// @Router /upload [post]
-func DirectUploadHandler(c *gin.Context, storageService *service.StorageServiceImpl, cfg *config.Config) {
-	// 获取并验证令牌
-	token := c.PostForm("token")
-	if token == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少上传令牌"})
-		return
-	}
-
-	// 解析JWT令牌
-	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
-		// 验证签名算法
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return []byte(cfg.Security.JWTSecret), nil
-	})
-
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的令牌", "detail": err.Error()})
-		return
-	}
-
-	// 验证令牌有效性
-	claims, ok := parsedToken.Claims.(jwt.MapClaims)
-	if !ok || !parsedToken.Valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌验证失败"})
-		return
-	}
-
-	// 获取文件信息
-	fileID, ok := claims["file_id"].(string)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "令牌中缺少文件ID"})
-		return
-	}
-
-	// 获取上传文件
-	file, err := c.FormFile("file")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "获取上传文件失败", "detail": err.Error()})
-		return
-	}
-
-	// 检查文件大小
-	size, ok := claims["size"].(float64)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "令牌中缺少文件大小"})
-		return
-	}
-
-	if file.Size > int64(size) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "文件大小超过预期"})
-		return
-	}
-
-	// 创建临时目录
-	tempDir := filepath.Join(os.TempDir(), "direct_upload", fileID)
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时目录失败", "detail": err.Error()})
-		return
-	}
-
-	// 保存文件到临时目录
-	tempFilePath := filepath.Join(tempDir, file.Filename)
-	if err := c.SaveUploadedFile(file, tempFilePath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存文件失败", "detail": err.Error()})
-		return
-	}
-
-	// 计算文件哈希
-	hash, err := storageService.CalculateFileHash(tempFilePath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "计算文件哈希失败", "detail": err.Error()})
-		return
-	}
-
-	// 将文件移动到存储位置
-	storagePath := filepath.Join(cfg.Storage.LocalDir, hash[0:2], hash[2:4], hash)
-	if err := os.MkdirAll(filepath.Dir(storagePath), 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建存储目录失败", "detail": err.Error()})
-		return
-	}
-
-	// 如果文件已存在，直接返回成功
-	if _, err := os.Stat(storagePath); err == nil {
-		// 清理临时文件
-		os.RemoveAll(tempDir)
-		c.JSON(http.StatusOK, gin.H{
-			"message": "文件已存在，上传成功",
-			"hash":    hash,
-			"size":    file.Size,
-		})
-		return
-	}
-
-	// 移动文件到存储位置
-	if err := os.Rename(tempFilePath, storagePath); err != nil {
-		// 如果跨设备移动失败，尝试复制
-		if strings.Contains(err.Error(), "cross-device link") {
-			srcFile, err := os.Open(tempFilePath)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "打开源文件失败", "detail": err.Error()})
-				return
-			}
-			defer srcFile.Close()
-
-			dstFile, err := os.Create(storagePath)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "创建目标文件失败", "detail": err.Error()})
-				return
-			}
-			defer dstFile.Close()
-
-			if _, err := io.Copy(dstFile, srcFile); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "复制文件失败", "detail": err.Error()})
-				return
-			}
-
-			// 设置文件权限
-			if err := os.Chmod(storagePath, 0644); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "设置文件权限失败", "detail": err.Error()})
-				return
-			}
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "移动文件失败", "detail": err.Error()})
-			return
-		}
-	}
-
-	// 清理临时目录
-	os.RemoveAll(tempDir)
-
-	c.JSON(http.StatusOK, gin.H{
-		"message": "上传成功",
-		"hash":    hash,
-		"size":    file.Size,
-	})
-}
-
-// 直接下载文件处理
-// @Summary 直接下载文件
-// @Description 通过临时令牌直接下载文件
-// @Tags 存储服务
-// @Accept json
-// @Produce octet-stream
-// @Param token query string true "下载令牌"
-// @Success 200 {file} file
-// @Failure 400 {object} map[string]interface{}
-// @Failure 401 {object} map[string]interface{}
-// @Failure 404 {object} map[string]interface{}
-// @Failure 500 {object} map[string]interface{}
-// @Router /download [get]
-func DirectDownloadHandler(c *gin.Context, storageService *service.StorageServiceImpl, cfg *config.Config) {
-	// 获取并验证令牌
-	token := c.Query("token")
-	if token == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少下载令牌"})
-		return
-	}
-
-	// 解析JWT令牌
-	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
-		// 验证签名算法
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return []byte(cfg.Security.JWTSecret), nil
-	})
-
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的令牌", "detail": err.Error()})
-		return
-	}
-
-	// 验证令牌有效性
-	claims, ok := parsedToken.Claims.(jwt.MapClaims)
-	if !ok || !parsedToken.Valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌验证失败"})
-		return
-	}
-
-	// 获取文件哈希
-	fileHash, ok := claims["file_hash"].(string)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "令牌中缺少文件哈希"})
-		return
-	}
-
-	// 获取文件名
-	filename, ok := claims["filename"].(string)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "令牌中缺少文件名"})
-		return
-	}
-
-	// 构建文件路径
-	filePath := filepath.Join(cfg.Storage.LocalDir, fileHash[0:2], fileHash[2:4], fileHash)
-
-	// 检查文件是否存在
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
-		return
-	}
-
-	// 设置响应头
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
-	c.Header("Content-Type", "application/octet-stream")
-
-	// 发送文件
-	c.File(filePath)
-}
-
 // 注册HTTP路由
 func RegisterHTTPHandlers(r *gin.Engine, storageService *service.StorageServiceImpl, cfg *config.Config) {
 	// ... existing code ...
 
 	// 添加直接上传和下载处理
-	r.POST("/upload", func(c *gin.Context) {
-		DirectUploadHandler(c, storageService, cfg)
-	})
-
-	r.GET("/download", func(c *gin.Context) {
-		DirectDownloadHandler(c, storageService, cfg)
-	})
+	r.POST("/upload", handleDirectUpload(storageService))
+	r.GET("/download", handleDirectDownload(storageService))
 
 	// ... existing code ...
 }

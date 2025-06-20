@@ -1,15 +1,15 @@
 database:
   user: root
   password: 123456
-  host: 127.0.0.1
-  port: 32306
+  host: mysql-test
+  port: 3306
   name: clouddrive
   charset: utf8mb4
   parseTime: true
   loc: Local
 
 redis:
-  addr: "localhost:32381"
+  addr: "redis-test:6379"
   user: ""
   password: ""
   db: 0
@@ -19,12 +19,16 @@ storage:
   type: local
   local_dir: uploads 
   minio:
-    endpoint: "localhost:9000"
+    endpoint: "minio-test:9000"
     access_key: "minioadmin"
     secret_key: "minioadmin"
     bucket: "clouddrive"
     use_ssl: false 
   chunk_server:
     enabled: true
-    url: "http://localhost:8081"
-    temp_dir: "/tmp/chunk_client" 
+    url: "http://chunk.clouddrive.local:30080"
+    temp_dir: "/tmp/chunk_client"
+    use_service_discovery: true
+    public_url: "http://chunk.clouddrive.local:30080"
+
+environment: "development" 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 // ChunkServerStorage 存储服务客户端
 type ChunkServerStorage struct {
 	BaseURL     string        // 存储服务基础URL
+	PublicURL   string        // 存储服务公共URL（返回给前端）
 	RedisClient *redis.Client // Redis客户端
 	TempDir     string        // 临时目录
 	SecretKey   string        // JWT密钥
@@ -36,11 +38,17 @@ func NewChunkServerStorage(baseURL string, redisClient *redis.Client, tempDir st
 
 	return &ChunkServerStorage{
 		BaseURL:     baseURL,
+		PublicURL:   baseURL, // 默认与BaseURL相同
 		RedisClient: redisClient,
 		TempDir:     tempDir,
 		SecretKey:   secretKey,
 		HTTPClient:  &http.Client{Timeout: 30 * time.Second},
 	}, nil
+}
+
+// SetPublicURL 设置公共URL
+func (c *ChunkServerStorage) SetPublicURL(publicURL string) {
+	c.PublicURL = publicURL
 }
 
 // Upload 实现Storage接口的Upload方法
@@ -137,7 +145,7 @@ func (c *ChunkServerStorage) Delete(ctx context.Context, key string) error {
 // InitMultipartUpload 实现Storage接口的InitMultipartUpload方法
 func (c *ChunkServerStorage) InitMultipartUpload(ctx context.Context, fileID string, filename string) (string, error) {
 	// 构建初始化URL
-	initURL := fmt.Sprintf("%s/api/multipart/init", c.BaseURL)
+	initURL := fmt.Sprintf("%s/api/multipart/init", c.PublicURL)
 
 	// 创建请求体
 	reqBody := map[string]string{
@@ -165,22 +173,54 @@ func (c *ChunkServerStorage) InitMultipartUpload(ctx context.Context, fileID str
 
 	// 检查响应状态
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("初始化分片上传失败，状态码: %d", resp.StatusCode)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("初始化分片上传失败，状态码: %d，响应: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	// 解析响应
-	var result struct {
-		UploadID string `json:"upload_id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("解析响应失败: %v", err)
+	// 读取整个响应体
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("读取响应体失败: %v", err)
 	}
 
-	return result.UploadID, nil
+	// 打印响应内容，用于调试
+	log.Printf("块存储服务响应: %s", string(bodyBytes))
+
+	// 尝试解析块存储服务的响应格式
+	var chunkServerResp struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			UploadID  string `json:"upload_id"`
+			ServerURL string `json:"server_url,omitempty"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(bodyBytes, &chunkServerResp); err != nil {
+		return "", fmt.Errorf("解析响应失败: %v, 响应内容: %s", err, string(bodyBytes))
+	}
+
+	// 检查响应码
+	if chunkServerResp.Code != 0 {
+		return "", fmt.Errorf("初始化分片上传失败: %s", chunkServerResp.Message)
+	}
+
+	// 提取上传ID
+	uploadID := chunkServerResp.Data.UploadID
+	if uploadID == "" {
+		return "", fmt.Errorf("响应中没有上传ID: %s", string(bodyBytes))
+	}
+
+	// 如果服务器返回了URL，使用它替换内部URL
+	if chunkServerResp.Data.ServerURL != "" {
+		c.PublicURL = chunkServerResp.Data.ServerURL
+	}
+
+	return uploadID, nil
 }
 
 // UploadPart 实现Storage接口的UploadPart方法
-func (c *ChunkServerStorage) UploadPart(ctx context.Context, uploadID string, partNumber int, partData io.Reader) (string, error) {
+func (c *ChunkServerStorage) UploadPart(ctx context.Context, uploadID string, partNumber int, partData io.Reader, options ...interface{}) (string, error) {
 	// 创建临时文件
 	tempFile := filepath.Join(c.TempDir, fmt.Sprintf("%s-%d", uploadID, partNumber))
 	file, err := os.Create(tempFile)
@@ -206,7 +246,7 @@ func (c *ChunkServerStorage) UploadPart(ctx context.Context, uploadID string, pa
 	defer file.Close()
 
 	// 构建上传URL
-	uploadURL := fmt.Sprintf("%s/api/multipart/part", c.BaseURL)
+	uploadURL := fmt.Sprintf("%s/api/multipart/part", c.PublicURL)
 
 	// 创建multipart表单
 	body := &bytes.Buffer{}
@@ -220,6 +260,15 @@ func (c *ChunkServerStorage) UploadPart(ctx context.Context, uploadID string, pa
 	// 添加partNumber字段
 	if err := writer.WriteField("part_number", strconv.Itoa(partNumber)); err != nil {
 		return "", fmt.Errorf("添加partNumber字段失败: %v", err)
+	}
+
+	// 如果提供了token，添加token字段
+	if len(options) > 0 {
+		if token, ok := options[0].(string); ok && token != "" {
+			if err := writer.WriteField("token", token); err != nil {
+				return "", fmt.Errorf("添加token字段失败: %v", err)
+			}
+		}
 	}
 
 	// 添加文件字段
@@ -252,24 +301,34 @@ func (c *ChunkServerStorage) UploadPart(ctx context.Context, uploadID string, pa
 
 	// 检查响应状态
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("上传分片失败，状态码: %d", resp.StatusCode)
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("上传分片失败，状态码: %d, 响应: %s", resp.StatusCode, string(respBody))
 	}
 
 	// 解析响应
 	var result struct {
-		ETag string `json:"etag"`
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			ETag string `json:"etag"`
+		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("解析响应失败: %v", err)
 	}
 
-	return result.ETag, nil
+	// 检查响应码
+	if result.Code != 0 {
+		return "", fmt.Errorf("上传分片失败: %s", result.Message)
+	}
+
+	return result.Data.ETag, nil
 }
 
 // CompleteMultipartUpload 实现Storage接口的CompleteMultipartUpload方法
 func (c *ChunkServerStorage) CompleteMultipartUpload(ctx context.Context, uploadID string, parts []PartInfo) (string, error) {
 	// 构建完成URL
-	completeURL := fmt.Sprintf("%s/api/multipart/complete", c.BaseURL)
+	completeURL := fmt.Sprintf("%s/api/multipart/complete", c.PublicURL)
 
 	// 创建请求体
 	reqBody := struct {
@@ -317,7 +376,7 @@ func (c *ChunkServerStorage) CompleteMultipartUpload(ctx context.Context, upload
 // ListUploadedParts 实现Storage接口的ListUploadedParts方法
 func (c *ChunkServerStorage) ListUploadedParts(ctx context.Context, uploadID string) ([]int, error) {
 	// 构建请求URL
-	listURL := fmt.Sprintf("%s/api/multipart/parts/%s", c.BaseURL, url.PathEscape(uploadID))
+	listURL := fmt.Sprintf("%s/api/multipart/status?upload_id=%s", c.PublicURL, url.QueryEscape(uploadID))
 
 	// 创建GET请求
 	req, err := http.NewRequestWithContext(ctx, "GET", listURL, nil)
@@ -339,13 +398,22 @@ func (c *ChunkServerStorage) ListUploadedParts(ctx context.Context, uploadID str
 
 	// 解析响应
 	var result struct {
-		Parts []int `json:"parts"`
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			Parts []int `json:"parts"`
+		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("解析响应失败: %v", err)
 	}
 
-	return result.Parts, nil
+	// 检查响应码
+	if result.Code != 0 {
+		return nil, fmt.Errorf("获取分片列表失败: %s", result.Message)
+	}
+
+	return result.Data.Parts, nil
 }
 
 // GenerateUploadToken 生成上传令牌
@@ -389,6 +457,14 @@ func (c *ChunkServerStorage) GenerateDownloadToken(fileHash string, filename str
 
 // GetBaseURL 获取块存储服务的基础URL
 func (c *ChunkServerStorage) GetBaseURL() string {
+	return c.BaseURL
+}
+
+// GetPublicURL 返回公共URL
+func (c *ChunkServerStorage) GetPublicURL() string {
+	if c.PublicURL != "" {
+		return c.PublicURL
+	}
 	return c.BaseURL
 }
 

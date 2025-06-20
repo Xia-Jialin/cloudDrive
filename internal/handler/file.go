@@ -637,6 +637,10 @@ func MultipartInitHandler(c *gin.Context) {
 			"instant":   true,
 		})
 		return
+	} else if err != gorm.ErrRecordNotFound {
+		// 只有当错误不是"记录未找到"时才返回错误
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询文件内容失败", "detail": err.Error()})
+		return
 	}
 	// 正常分片上传流程
 	stor := c.MustGet(StorageKey).(storage.Storage)
@@ -681,11 +685,32 @@ func MultipartUploadPartHandler(c *gin.Context) {
 		return
 	}
 	// 校验 uploadId 归属
-	_, ok := checkUploadIdBelongsToUser(c, uploadId)
+	info, ok := checkUploadIdBelongsToUser(c, uploadId)
 	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权限或uploadId无效"})
 		return
 	}
+
+	// 生成用于分片上传的token
+	var token string
+	chunkStorage, ok := stor.(*storage.ChunkServerStorage)
+	if ok {
+		// 准备上传信息
+		uploadInfo := map[string]interface{}{
+			"file_id":  info["hash"],
+			"user_id":  c.MustGet("user_id").(uint),
+			"filename": info["name"],
+			"size":     info["size"],
+		}
+
+		// 生成token
+		token, err = chunkStorage.GenerateUploadToken(uploadInfo, 3600) // 1小时过期
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成上传令牌失败", "detail": err.Error()})
+			return
+		}
+	}
+
 	fileHeader, err := c.FormFile("part")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "未选择分片文件"})
@@ -702,7 +727,9 @@ func MultipartUploadPartHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "分片读取失败"})
 		return
 	}
-	_, err = stor.UploadPart(context.Background(), uploadId, partNumber, bytes.NewReader(data))
+
+	// 使用新的接口，传递token作为可选参数
+	_, err = stor.UploadPart(context.Background(), uploadId, partNumber, bytes.NewReader(data), token)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "分片保存失败", "detail": err.Error()})
 		return
@@ -832,8 +859,16 @@ func MultipartCompleteHandler(c *gin.Context) {
 	var fileContent file.FileContent
 	err = db.First(&fileContent, "hash = ?", hash).Error
 	if err == gorm.ErrRecordNotFound {
+		// 记录不存在，创建新记录
 		fileContent = file.FileContent{Hash: hash, Size: fileSize}
-		db.Create(&fileContent)
+		if err := db.Create(&fileContent).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建文件内容记录失败", "detail": err.Error()})
+			return
+		}
+	} else if err != nil {
+		// 其他错误
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询文件内容失败", "detail": err.Error()})
+		return
 	}
 	f := file.File{
 		Name:       name,

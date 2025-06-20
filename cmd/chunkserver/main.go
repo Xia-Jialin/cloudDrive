@@ -3,15 +3,19 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"cloudDrive/cmd/chunkserver/internal/api"
 	"cloudDrive/cmd/chunkserver/internal/config"
 	"cloudDrive/cmd/chunkserver/internal/service"
+	"cloudDrive/internal/discovery"
 	"cloudDrive/internal/storage"
 
 	"github.com/go-redis/redis/v8"
@@ -25,6 +29,14 @@ var (
 
 func main() {
 	flag.Parse()
+
+	// 从环境变量获取配置
+	if env := os.Getenv("ETCD_ENDPOINT"); env != "" {
+		*etcdEndpoint = env
+	}
+	if env := os.Getenv("ETCD_KEY"); env != "" {
+		*etcdKey = env
+	}
 
 	// 加载配置
 	cfg, err := config.LoadConfig(*configPath, *etcdEndpoint, *etcdKey)
@@ -89,6 +101,55 @@ func main() {
 
 	// 创建gRPC服务器
 	grpcServer := api.NewGRPCServer(storageService)
+
+	// 注册服务到ETCD
+	if *etcdEndpoint != "" {
+		etcdEndpoints := strings.Split(*etcdEndpoint, ",")
+
+		// 准备服务信息
+		serviceInfo := discovery.ServiceInfo{
+			Name:      "clouddrive-chunkserver",
+			Address:   "", // 自动获取
+			Port:      cfg.Server.HTTPPort,
+			Version:   "1.0.0",
+			StartTime: time.Now(),
+			Metadata: map[string]string{
+				"storage_type": cfg.Storage.Type,
+				"grpc_port":    strconv.Itoa(cfg.Server.GRPCPort),
+			},
+			Endpoints: map[string]string{
+				"http": fmt.Sprintf("/api"),
+				"grpc": fmt.Sprintf(":%d", cfg.Server.GRPCPort),
+			},
+		}
+
+		// 创建服务注册实例
+		registry, err := discovery.NewEtcdServiceRegistry(etcdEndpoints, serviceInfo, 15)
+		if err != nil {
+			log.Printf("创建服务注册失败: %v", err)
+		} else {
+			// 注册服务
+			ctx := context.Background()
+			if err := registry.Register(ctx); err != nil {
+				log.Printf("注册服务到ETCD失败: %v", err)
+			} else {
+				log.Printf("服务已成功注册到ETCD")
+			}
+
+			// 优雅关闭时注销服务
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := registry.Deregister(ctx); err != nil {
+					log.Printf("注销服务失败: %v", err)
+				} else {
+					log.Printf("服务已成功从ETCD注销")
+				}
+			}()
+		}
+	} else {
+		log.Println("未配置ETCD地址，跳过服务注册")
+	}
 
 	// 启动HTTP服务器
 	go func() {

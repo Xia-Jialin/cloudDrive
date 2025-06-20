@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chunkserver
+  labels:
+    app: chunkserver
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: chunkserver
+  template:
+    metadata:
+      labels:
+        app: chunkserver
+    spec:
+      containers:
+      - name: chunkserver
+        image: registry.cn-hangzhou.aliyuncs.com/xiajialin/cloud_drive_chunkserver:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8081
+          name: http
+        - containerPort: 9000
+          name: grpc
+        env:
+        - name: ETCD_ENDPOINT
+          value: "etcd:2379"
+        - name: ETCD_KEY
+          value: "/clouddrive/chunkserver/config"
+        volumeMounts:
+        - name: uploads
+          mountPath: /app/uploads
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: uploads
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chunkserver
+  labels:
+    app: chunkserver
+spec:
+  type: ClusterIP
+  selector:
+    app: chunkserver
+  ports:
+  - port: 8081
+    targetPort: 8081
+    name: http
+  - port: 9000
+    targetPort: 9000
+    name: grpc 

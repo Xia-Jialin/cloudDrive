@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	"cloudDrive/internal/storage"
 
@@ -25,6 +26,7 @@ type StorageService interface {
 	InitMultipartUpload(ctx context.Context, fileID string, filename string) (string, error)
 	UploadPart(ctx context.Context, uploadID string, partNumber int, partData io.Reader) (string, error)
 	CompleteMultipartUpload(ctx context.Context, uploadID string, parts []storage.PartInfo) (string, error)
+	ListParts(ctx context.Context, uploadID string) ([]int, error)
 
 	// 验证令牌
 	VerifyToken(ctx context.Context, token string, operation string) (map[string]interface{}, error)
@@ -82,6 +84,36 @@ func (s *StorageServiceImpl) CompleteMultipartUpload(ctx context.Context, upload
 	return s.storage.CompleteMultipartUpload(ctx, uploadID, parts)
 }
 
+// ListParts 列出已上传的分片
+func (s *StorageServiceImpl) ListParts(ctx context.Context, uploadID string) ([]int, error) {
+	// 检查存储接口是否实现了ListUploadedParts方法
+	if chunkStorage, ok := s.storage.(*storage.ChunkServerStorage); ok {
+		return chunkStorage.ListUploadedParts(ctx, uploadID)
+	}
+
+	// 对于其他存储类型，可以从redis或其他地方获取分片信息
+	key := fmt.Sprintf("chunk:multipart:%s:parts", uploadID)
+	result, err := s.redis.SMembers(ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return []int{}, nil
+		}
+		return nil, fmt.Errorf("获取分片列表失败: %v", err)
+	}
+
+	// 将字符串转换为整数
+	parts := make([]int, 0, len(result))
+	for _, partStr := range result {
+		partNum, err := strconv.Atoi(partStr)
+		if err != nil {
+			continue
+		}
+		parts = append(parts, partNum)
+	}
+
+	return parts, nil
+}
+
 // VerifyToken 验证令牌
 func (s *StorageServiceImpl) VerifyToken(ctx context.Context, token string, operation string) (map[string]interface{}, error) {
 	// 从Redis获取令牌信息
@@ -117,4 +149,9 @@ func (s *StorageServiceImpl) CalculateFileHash(filePath string) (string, error) 
 	}
 
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// GetRedisClient 获取Redis客户端
+func (s *StorageServiceImpl) GetRedisClient() *redis.Client {
+	return s.redis
 }

@@ -52,7 +52,7 @@ func (l *LocalFileStorage) InitMultipartUpload(ctx context.Context, fileID strin
 }
 
 // UploadPart 上传分片
-func (l *LocalFileStorage) UploadPart(ctx context.Context, uploadID string, partNumber int, partData io.Reader) (string, error) {
+func (l *LocalFileStorage) UploadPart(ctx context.Context, uploadID string, partNumber int, partData io.Reader, options ...interface{}) (string, error) {
 	dir := filepath.Join(l.Dir, "multipart", uploadID)
 	partPath := filepath.Join(dir, fmt.Sprintf("%d", partNumber))
 

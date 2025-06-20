@@ -27,7 +27,7 @@ type Storage interface {
 
 	// 分片上传相关方法
 	InitMultipartUpload(ctx context.Context, fileID string, filename string) (string, error)
-	UploadPart(ctx context.Context, uploadID string, partNumber int, partData io.Reader) (string, error)
+	UploadPart(ctx context.Context, uploadID string, partNumber int, partData io.Reader, options ...interface{}) (string, error)
 	CompleteMultipartUpload(ctx context.Context, uploadID string, parts []PartInfo) (string, error)
 	ListUploadedParts(ctx context.Context, uploadID string) ([]int, error)
 }

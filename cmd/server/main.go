@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cloudDrive/internal/discovery"
 	"cloudDrive/internal/file"
 	"cloudDrive/internal/handler"
 	"cloudDrive/internal/storage"
@@ -11,8 +12,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "cloudDrive/docs"
@@ -27,6 +31,7 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	goetcd "go.etcd.io/etcd/client/v3"
 )
@@ -67,6 +72,7 @@ func main() {
 	configPath := flag.String("config", "./configs/config.yaml", "配置文件路径")
 	etcdEndpoint := flag.String("etcd-endpoint", "etcd:2379", "etcd服务地址")
 	etcdKey := flag.String("etcd-key", "clouddrive-server", "etcd配置key")
+	servicePort := flag.Int("port", 8080, "服务端口")
 	flag.Parse()
 
 	// 优先用环境变量
@@ -75,6 +81,11 @@ func main() {
 	}
 	if env := os.Getenv("ETCD_KEY"); env != "" {
 		*etcdKey = env
+	}
+	if env := os.Getenv("PORT"); env != "" {
+		if port, err := strconv.Atoi(env); err == nil {
+			*servicePort = port
+		}
 	}
 
 	// 优先从etcd加载配置
@@ -110,7 +121,19 @@ func main() {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=%s&loc=%s",
 		dbUser, dbPassword, dbHost, dbPort, dbName, dbCharset, parseTimeStr, loc)
 
-	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	// 配置GORM日志
+	gormLogger := logger.Default
+	if viper.GetString("environment") == "production" {
+		// 生产环境只记录错误
+		gormLogger = logger.Default.LogMode(logger.Error)
+	} else {
+		// 开发环境记录信息
+		gormLogger = logger.Default.LogMode(logger.Info)
+	}
+
+	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{
+		Logger: gormLogger,
+	})
 	if err != nil {
 		log.Fatalf("数据库连接失败: %v", err)
 	}
@@ -163,6 +186,7 @@ func main() {
 	chunkServerEnabled := viper.GetBool("storage.chunk_server.enabled")
 	chunkServerURL := viper.GetString("storage.chunk_server.url")
 	chunkServerTempDir := viper.GetString("storage.chunk_server.temp_dir")
+	useServiceDiscovery := viper.GetBool("storage.chunk_server.use_service_discovery")
 
 	var storageInst storage.Storage // 用于注入
 
@@ -178,14 +202,68 @@ func main() {
 		log.Fatalf("创建块存储服务临时目录失败: %v", err)
 	}
 
-	// 初始化块存储服务客户端
-	chunkStorage, err := storage.NewChunkServerStorage(chunkServerURL, redisClient, chunkServerTempDir)
-	if err != nil {
-		log.Fatalf("初始化块存储服务客户端失败: %v", err)
+	// 使用服务发现或直接连接
+	if useServiceDiscovery && *etcdEndpoint != "" {
+		log.Println("使用服务发现获取块存储服务")
+		// 创建块存储服务发现客户端
+		chunkServerDiscovery, err := storage.NewChunkServerDiscovery(
+			strings.Split(*etcdEndpoint, ","),
+			"clouddrive-chunkserver",
+			redisClient,
+			chunkServerTempDir,
+		)
+		if err != nil {
+			log.Printf("创建块存储服务发现客户端失败: %v，将使用静态配置", err)
+		} else {
+			// 获取块存储服务客户端
+			chunkStorage, err := chunkServerDiscovery.GetChunkServerClient()
+			if err != nil {
+				log.Printf("获取块存储服务客户端失败: %v，将使用静态配置", err)
+			} else {
+				storageInst = chunkStorage
+				log.Printf("已通过服务发现连接到块存储服务")
+
+				// 在退出时关闭服务发现客户端
+				defer chunkServerDiscovery.Close()
+
+				// 定期打印当前可用的块存储服务实例
+				go func() {
+					ticker := time.NewTicker(30 * time.Second)
+					defer ticker.Stop()
+
+					for {
+						select {
+						case <-ticker.C:
+							instances := chunkServerDiscovery.GetAllInstances()
+							log.Printf("当前可用的块存储服务实例数量: %d", len(instances))
+							for i, instance := range instances {
+								log.Printf("实例 #%d: %s (%s:%d)", i+1, instance.ID, instance.Address, instance.Port)
+							}
+						}
+					}
+				}()
+			}
+		}
 	}
 
-	storageInst = chunkStorage
-	log.Printf("已连接到块存储服务: %s", chunkServerURL)
+	// 如果服务发现失败或未启用，则使用静态配置
+	if storageInst == nil {
+		// 初始化块存储服务客户端
+		chunkStorage, err := storage.NewChunkServerStorage(chunkServerURL, redisClient, chunkServerTempDir)
+		if err != nil {
+			log.Fatalf("初始化块存储服务客户端失败: %v", err)
+		}
+
+		// 设置公共URL（如果配置中有）
+		publicURL := viper.GetString("storage.chunk_server.public_url")
+		if publicURL != "" {
+			chunkStorage.SetPublicURL(publicURL)
+			log.Printf("块存储服务公共URL设置为: %s", publicURL)
+		}
+
+		storageInst = chunkStorage
+		log.Printf("已直接连接到块存储服务: %s", chunkServerURL)
+	}
 
 	// 注入 db、redis、storage 到 gin.Context
 	r.Use(func(c *gin.Context) {
@@ -238,5 +316,81 @@ func main() {
 
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	r.Run(":8080")
+	// 服务健康检查端点
+	r.GET("/health", handler.HealthCheck)
+	r.GET("/api/health", handler.HealthCheck)
+
+	// 注册服务到ETCD
+	etcdEndpoints := strings.Split(*etcdEndpoint, ",")
+	serviceInfo := discovery.ServiceInfo{
+		Name:        "clouddrive-server",
+		Address:     "", // 自动获取
+		Port:        *servicePort,
+		Version:     "1.0.0",
+		StartTime:   time.Now(),
+		Environment: viper.GetString("environment"),
+		Metadata: map[string]string{
+			"api_version": "v1",
+		},
+		Endpoints: map[string]string{
+			"health": "/api/health",
+			"api":    "/api",
+		},
+	}
+
+	// 创建服务注册实例
+	registry, err := discovery.NewEtcdServiceRegistry(etcdEndpoints, serviceInfo, 15)
+	if err != nil {
+		log.Printf("创建服务注册失败: %v", err)
+	} else {
+		// 注册服务
+		ctx := context.Background()
+		if err := registry.Register(ctx); err != nil {
+			log.Printf("注册服务到ETCD失败: %v", err)
+		} else {
+			log.Printf("服务已成功注册到ETCD")
+		}
+
+		// 优雅关闭时注销服务
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := registry.Deregister(ctx); err != nil {
+				log.Printf("注销服务失败: %v", err)
+			} else {
+				log.Printf("服务已成功从ETCD注销")
+			}
+		}()
+	}
+
+	// 优雅关闭
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%d", *servicePort),
+		Handler: r,
+	}
+
+	// 在goroutine中启动服务器
+	go func() {
+		log.Printf("服务器启动在端口 %d", *servicePort)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("启动服务器失败: %v", err)
+		}
+	}()
+
+	// 等待中断信号
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("正在关闭服务器...")
+
+	// 设置关闭超时
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 优雅关闭
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("服务器关闭失败: %v", err)
+	}
+
+	log.Println("服务器已关闭")
 }

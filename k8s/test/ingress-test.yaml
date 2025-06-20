@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: clouddrive-ingress
+  annotations:
+    # 不使用rewrite-target，让请求路径保持原样传递给后端服务
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"  # 允许上传大文件
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: clouddrive.local  # 您可以修改为您的实际域名
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: api-server
+            port:
+              number: 8080
+  # 如果您需要直接访问块存储服务的gRPC端口，可能需要另外的配置
+  # 注意：标准Nginx Ingress不直接支持gRPC，需要特殊配置或使用专门的gRPC Ingress 

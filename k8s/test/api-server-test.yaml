@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-server
+  labels:
+    app: api-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-server
+  template:
+    metadata:
+      labels:
+        app: api-server
+    spec:
+      containers:
+      - name: api-server
+        image: registry.cn-hangzhou.aliyuncs.com/xiajialin/cloud_drive:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: ETCD_ENDPOINT
+          value: "etcd:2379"
+        - name: ETCD_KEY
+          value: "/clouddrive/server/config"
+        - name: PORT
+          value: "8080"
+        volumeMounts:
+        - name: uploads
+          mountPath: /app/uploads
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: uploads
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-server
+  labels:
+    app: api-server
+spec:
+  type: ClusterIP
+  selector:
+    app: api-server
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http 
