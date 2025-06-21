@@ -1,5 +1,6 @@
 IMAGE_NAME=registry.cn-hangzhou.aliyuncs.com/xiajialin/cloud_drive
 CHUNKSERVER_IMAGE_NAME=registry.cn-hangzhou.aliyuncs.com/xiajialin/cloud_drive_chunkserver
+WEB_IMAGE_NAME=registry.cn-hangzhou.aliyuncs.com/xiajialin/cloud_drive_web
 TAG ?= latest
 
 .PHONY: docker-build
@@ -18,11 +19,19 @@ chunkserver-docker-build:
 chunkserver-docker-push:
 	docker push $(CHUNKSERVER_IMAGE_NAME):$(TAG)
 
+.PHONY: web-docker-build
+web-docker-build:
+	docker build -t $(WEB_IMAGE_NAME):$(TAG) -f web/Dockerfile web/
+
+.PHONY: web-docker-push
+web-docker-push:
+	docker push $(WEB_IMAGE_NAME):$(TAG)
+
 .PHONY: build-all-images
-build-all-images: docker-build chunkserver-docker-build
+build-all-images: docker-build chunkserver-docker-build web-docker-build
 
 .PHONY: push-all-images
-push-all-images: docker-push chunkserver-docker-push
+push-all-images: docker-push chunkserver-docker-push web-docker-push
 
 # 测试环境部署相关命令
 .PHONY: deploy-test-env
@@ -52,6 +61,10 @@ deploy-chunkserver:
 deploy-api-server:
 	kubectl apply -f k8s/test/api-server-test.yaml
 
+.PHONY: deploy-web
+deploy-web:
+	kubectl apply -f k8s/test/web-test.yaml
+
 .PHONY: install-ingress-controller
 install-ingress-controller:
 	kubectl apply -f k8s/test/ingress-nginx-controller.yaml
@@ -64,7 +77,7 @@ deploy-ingress:
 	kubectl apply -f k8s/test/grpc-ingress-test.yaml
 
 .PHONY: deploy-all
-deploy-all: deploy-test-env deploy-chunkserver deploy-api-server deploy-ingress
+deploy-all: deploy-test-env deploy-chunkserver deploy-api-server deploy-web deploy-ingress
 
 .PHONY: deploy-with-ingress
 deploy-with-ingress:
@@ -82,6 +95,7 @@ delete-test-env:
 	kubectl delete -f k8s/test/minio-test.yaml || true
 	kubectl delete -f k8s/test/chunkserver-test.yaml || true 
 	kubectl delete -f k8s/test/api-server-test.yaml || true
+	kubectl delete -f k8s/test/web-test.yaml || true
 	kubectl delete -f k8s/test/ingress-test.yaml || true
 	kubectl delete -f k8s/test/chunkserver-ingress.yaml || true
 	kubectl delete -f k8s/test/grpc-ingress-test.yaml || true
