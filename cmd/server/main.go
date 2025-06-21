@@ -295,6 +295,7 @@ func main() {
 	apiAuth.POST("/files/multipart/upload", handler.MultipartUploadPartHandler)
 	apiAuth.GET("/files/multipart/status", handler.MultipartStatusHandler)
 	apiAuth.POST("/files/multipart/complete", handler.MultipartCompleteHandler)
+	apiAuth.POST("/files/multipart/refresh-token", handler.MultipartRefreshTokenHandler)
 
 	// 添加临时URL API
 	apiAuth.GET("/files/upload-url", handler.GetUploadURLHandler)

@@ -2,3 +2,5 @@
 web/node_modules/
 uploads/
 cmd/chunkserver/chunkserver
+chunkserver
+clouddrive

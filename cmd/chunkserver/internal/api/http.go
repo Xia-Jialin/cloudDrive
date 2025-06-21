@@ -415,36 +415,83 @@ func handleUploadPart(service *service.StorageServiceImpl) gin.HandlerFunc {
 // 处理完成分片上传请求
 func handleCompleteMultipart(service *service.StorageServiceImpl) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		uploadID := c.PostForm("upload_id")
-		partsJSON := c.PostForm("parts")
-		token := c.PostForm("token")
+		// 检查Content-Type，支持JSON和表单两种格式
+		contentType := c.GetHeader("Content-Type")
 
-		if uploadID == "" || partsJSON == "" || token == "" {
+		var uploadID string
+		var parts []storage.PartInfo
+		var token string
+
+		if strings.Contains(contentType, "application/json") {
+			// 处理JSON格式请求
+			var req struct {
+				UploadID string             `json:"upload_id"`
+				Parts    []storage.PartInfo `json:"parts"`
+				Token    string             `json:"token,omitempty"`
+			}
+
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    1,
+					"message": fmt.Sprintf("解析JSON请求失败: %v", err),
+				})
+				return
+			}
+
+			uploadID = req.UploadID
+			parts = req.Parts
+			token = req.Token
+		} else {
+			// 处理表单格式请求（保持向后兼容）
+			uploadID = c.PostForm("upload_id")
+			partsJSON := c.PostForm("parts")
+			token = c.PostForm("token")
+
+			if uploadID == "" || partsJSON == "" {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    1,
+					"message": "upload_id和parts参数必填",
+				})
+				return
+			}
+
+			// 解析分片信息
+			if err := json.Unmarshal([]byte(partsJSON), &parts); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    3,
+					"message": fmt.Sprintf("解析分片信息失败: %v", err),
+				})
+				return
+			}
+		}
+
+		// 验证基本参数
+		if uploadID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    1,
-				"message": "upload_id、parts和token参数必填",
+				"message": "upload_id参数必填",
 			})
 			return
 		}
 
-		// 验证令牌
-		_, err := service.VerifyToken(c.Request.Context(), token, "multipart_complete")
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    2,
-				"message": err.Error(),
-			})
-			return
-		}
-
-		// 解析分片信息
-		var parts []storage.PartInfo
-		if err := json.Unmarshal([]byte(partsJSON), &parts); err != nil {
+		if len(parts) == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    3,
-				"message": fmt.Sprintf("解析分片信息失败: %v", err),
+				"code":    1,
+				"message": "parts参数必填",
 			})
 			return
+		}
+
+		// 验证令牌（如果提供了token）
+		if token != "" {
+			_, err := service.VerifyToken(c.Request.Context(), token, "multipart_complete")
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    2,
+					"message": err.Error(),
+				})
+				return
+			}
 		}
 
 		// 完成分片上传
@@ -461,7 +508,8 @@ func handleCompleteMultipart(service *service.StorageServiceImpl) gin.HandlerFun
 			"code":    0,
 			"message": "完成分片上传成功",
 			"data": gin.H{
-				"file_id": fileID,
+				"file_id":   fileID,
+				"file_hash": fileID, // 为了兼容客户端期望的字段名
 			},
 		})
 	}

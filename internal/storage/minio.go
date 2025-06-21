@@ -73,8 +73,12 @@ func (m *MinioStorage) Delete(ctx context.Context, fileID string) error {
 
 // InitMultipartUpload 初始化分片上传
 func (m *MinioStorage) InitMultipartUpload(ctx context.Context, fileID string, filename string) (string, error) {
-	// 创建一个唯一的上传ID
-	uploadID := fmt.Sprintf("%s-%d", fileID, time.Now().UnixNano())
+	// 创建一个唯一的上传ID，使用绝对值确保是正数
+	timestamp := time.Now().UnixNano()
+	if timestamp < 0 {
+		timestamp = -timestamp // 确保是正数
+	}
+	uploadID := fmt.Sprintf("%s_%d", fileID, timestamp)
 
 	// 创建上传ID对应的目录
 	dir := filepath.Join(m.TmpDir, uploadID)
@@ -92,7 +96,7 @@ func (m *MinioStorage) InitMultipartUpload(ctx context.Context, fileID string, f
 }
 
 // UploadPart 上传分片
-func (m *MinioStorage) UploadPart(ctx context.Context, uploadID string, partNumber int, partData io.Reader) (string, error) {
+func (m *MinioStorage) UploadPart(ctx context.Context, uploadID string, partNumber int, partData io.Reader, options ...interface{}) (string, error) {
 	// 创建上传ID对应的目录
 	dir := filepath.Join(m.TmpDir, uploadID)
 

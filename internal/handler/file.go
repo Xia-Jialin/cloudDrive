@@ -14,7 +14,6 @@ import (
 	"mime"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -822,25 +821,10 @@ func MultipartCompleteHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "合并失败", "detail": err.Error()})
 		return
 	}
-	// 合并后 hash 校验
-	filePath := filepath.Join("uploads", req.TargetKey)
-	fCheck, err := os.Open(filePath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件打开失败", "detail": err.Error()})
-		return
-	}
-	defer fCheck.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, fCheck); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "hash 校验失败", "detail": err.Error()})
-		return
-	}
-	serverHash := hex.EncodeToString(h.Sum(nil))
-	if serverHash != req.TargetKey {
-		os.Remove(filePath)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "文件 hash 校验失败，上传内容有误"})
-		return
-	}
+
+	// 注意：ChunkServer已经处理了文件合并和验证，这里不需要再次进行本地文件哈希校验
+	// 因为文件存储在ChunkServer的存储系统中（MinIO或本地存储），而不是API Server的本地文件系统
+
 	// 合并成功后更新用户已用空间
 	if err := user.UpdateUserStorageUsed(db, userID, fileSize); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新存储空间失败", "detail": err.Error()})
@@ -893,6 +877,59 @@ func MultipartCompleteHandler(c *gin.Context) {
 		rdb.Del(ctx, keys...)
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "合并成功"})
+}
+
+// @Summary 刷新分片上传令牌
+// @Description 刷新分片上传的令牌，用于处理令牌过期的情况
+// @Tags 文件模块
+// @Accept json
+// @Produce json
+// @Param data body map[string]string true "包含upload_id和hash的JSON"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 403 {object} map[string]interface{}
+// @Router /files/multipart/refresh-token [post]
+func MultipartRefreshTokenHandler(c *gin.Context) {
+	var req struct {
+		UploadID string `json:"upload_id"`
+		Hash     string `json:"hash"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.UploadID == "" || req.Hash == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+
+	// 校验 uploadId 归属
+	info, ok := checkUploadIdBelongsToUser(c, req.UploadID)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权限或uploadId无效"})
+		return
+	}
+
+	// 生成新的令牌
+	stor := c.MustGet(StorageKey).(storage.Storage)
+	chunkStorage, ok := stor.(*storage.ChunkServerStorage)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "当前存储模式不支持分片上传"})
+		return
+	}
+
+	// 准备上传信息
+	uploadInfo := map[string]interface{}{
+		"file_id":  info["hash"],
+		"user_id":  c.MustGet("user_id").(uint),
+		"filename": info["name"],
+		"size":     info["size"],
+	}
+
+	// 生成新的token，有效期1小时
+	token, err := chunkStorage.GenerateUploadToken(uploadInfo, 3600)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成上传令牌失败", "detail": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"token": token})
 }
 
 // @Summary 获取临时上传URL

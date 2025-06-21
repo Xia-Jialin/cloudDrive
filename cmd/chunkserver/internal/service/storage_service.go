@@ -9,10 +9,12 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"time"
 
 	"cloudDrive/internal/storage"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/golang-jwt/jwt/v4"
 )
 
 // StorageService 存储服务接口
@@ -119,19 +121,66 @@ func (s *StorageServiceImpl) VerifyToken(ctx context.Context, token string, oper
 	// 从Redis获取令牌信息
 	key := fmt.Sprintf("chunk:token:%s", token)
 	val, err := s.redis.Get(ctx, key).Result()
-	if err != nil {
-		if err == redis.Nil {
+	if err == nil {
+		// 对于新的令牌格式，值就是fileID
+		tokenInfo := map[string]interface{}{
+			"file_id": val,
+		}
+		return tokenInfo, nil
+	}
+
+	// 如果Redis中没有找到令牌，尝试使用JWT验证
+	if err == redis.Nil {
+		// 尝试解析JWT令牌
+		tokenClaims, err := parseJWTToken(token)
+		if err != nil {
 			return nil, errors.New("令牌无效或已过期")
 		}
-		return nil, fmt.Errorf("验证令牌失败: %v", err)
+
+		// 检查令牌是否过期
+		if exp, ok := tokenClaims["exp"].(float64); ok {
+			if time.Now().Unix() > int64(exp) {
+				return nil, errors.New("令牌已过期")
+			}
+		}
+
+		// 从JWT中获取fileID
+		fileID, ok := tokenClaims["file_id"].(string)
+		if !ok || fileID == "" {
+			return nil, errors.New("无效的文件ID")
+		}
+
+		// 将令牌信息保存到Redis，有效期1小时
+		s.redis.Set(ctx, key, fileID, time.Hour)
+
+		return tokenClaims, nil
 	}
 
-	// 对于新的令牌格式，值就是fileID
-	tokenInfo := map[string]interface{}{
-		"file_id": val,
+	return nil, fmt.Errorf("验证令牌失败: %v", err)
+}
+
+// parseJWTToken 解析JWT令牌
+func parseJWTToken(tokenString string) (map[string]interface{}, error) {
+	// 使用jwt库直接解析
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// 这里应该使用与签名时相同的密钥
+		return []byte("your-super-secret-key-for-jwt-token-signing"), nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
 
-	return tokenInfo, nil
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		// 将claims转换为map[string]interface{}
+		result := make(map[string]interface{})
+		for key, val := range claims {
+			result[key] = val
+		}
+		return result, nil
+	} else {
+		return nil, errors.New("无效的令牌")
+	}
 }
 
 // CalculateFileHash 计算文件的SHA256哈希值

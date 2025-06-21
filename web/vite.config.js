@@ -2,8 +2,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 // 从环境变量获取API地址，默认使用Kubernetes部署的API服务
-// 如果使用Ingress，地址格式为 http://198.19.249.2:30080 或实际的Ingress控制器地址
-const apiBaseUrl = process.env.VITE_API_BASE_URL || 'http://localhost:32080';
+// 使用Ingress地址
+const apiBaseUrl = process.env.VITE_API_BASE_URL || 'http://192.168.194.191';
 
 // 从环境变量获取Host头，默认为clouddrive.local
 const apiHost = process.env.VITE_API_HOST || 'clouddrive.local';

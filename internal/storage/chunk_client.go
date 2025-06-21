@@ -357,17 +357,23 @@ func (c *ChunkServerStorage) CompleteMultipartUpload(ctx context.Context, upload
 	}
 	defer resp.Body.Close()
 
+	// 读取响应体
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("读取响应体失败: %v", err)
+	}
+
 	// 检查响应状态
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("完成分片上传失败，状态码: %d", resp.StatusCode)
+		return "", fmt.Errorf("完成分片上传失败，状态码: %d，响应: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	// 解析响应
 	var result struct {
 		FileHash string `json:"file_hash"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("解析响应失败: %v", err)
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		return "", fmt.Errorf("解析响应失败: %v，响应内容: %s", err, string(bodyBytes))
 	}
 
 	return result.FileHash, nil

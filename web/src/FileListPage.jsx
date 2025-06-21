@@ -162,13 +162,39 @@ const FileListPage = () => {
           setUploadPercent(Math.round((uploadedCount / chunks.length) * 100));
           continue;
         }
-        const form = new FormData();
-        form.append('upload_id', upload_id);
-        form.append('part_number', i + 1);
-        form.append('part', chunks[i]);
-        await axios.post('/api/files/multipart/upload', form, { withCredentials: true });
-        uploadedCount++;
-        setUploadPercent(Math.round((uploadedCount / chunks.length) * 100));
+        
+        try {
+          const form = new FormData();
+          form.append('upload_id', upload_id);
+          form.append('part_number', i + 1);
+          form.append('part', chunks[i]);
+          await axios.post('/api/files/multipart/upload', form, { withCredentials: true });
+          uploadedCount++;
+          setUploadPercent(Math.round((uploadedCount / chunks.length) * 100));
+        } catch (error) {
+          // 如果是401错误（令牌过期），尝试重新获取令牌并重试
+          if (error.response?.status === 401 || 
+              (error.response?.data?.detail && error.response?.data?.detail.includes("令牌无效或已过期"))) {
+            console.log("令牌过期，重新获取令牌并重试...");
+            // 重新获取令牌
+            const tokenRes = await axios.post('/api/files/multipart/refresh-token', {
+              upload_id: upload_id,
+              hash: hash
+            }, { withCredentials: true });
+            
+            // 使用新令牌重试
+            const form = new FormData();
+            form.append('upload_id', upload_id);
+            form.append('part_number', i + 1);
+            form.append('part', chunks[i]);
+            await axios.post('/api/files/multipart/upload', form, { withCredentials: true });
+            uploadedCount++;
+            setUploadPercent(Math.round((uploadedCount / chunks.length) * 100));
+          } else {
+            // 其他错误直接抛出
+            throw error;
+          }
+        }
       }
       // 6. 合并分片
       await axios.post('/api/files/multipart/complete', {
