@@ -630,14 +630,79 @@ func MultipartInitHandler(c *gin.Context) {
 	var fileContent file.FileContent
 	err := db.First(&fileContent, "hash = ?", req.Hash).Error
 	if err == nil {
-		// 已存在，直接返回
+		// 已存在，执行秒传逻辑
+		// 1. 确定父目录ID
+		parentID := req.ParentID
+		if parentID == "" {
+			var userRoot file.UserRoot
+			if err := db.First(&userRoot, "user_id = ?", userID).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "查找根目录失败", "detail": err.Error()})
+				return
+			}
+			parentID = userRoot.RootID
+		}
+
+		// 2. 检查用户存储空间
+		u, err := user.GetUserByID(db, userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "用户不存在"})
+			return
+		}
+		if u.StorageUsed+fileContent.Size > u.StorageLimit {
+			c.JSON(http.StatusForbidden, gin.H{"error": "存储空间不足"})
+			return
+		}
+
+		// 3. 检查同目录下是否已有同名文件
+		var count int64
+		db.Model(&file.File{}).Where("parent_id = ? AND name = ? AND owner_id = ?", parentID, req.Name, userID).Count(&count)
+		if count > 0 {
+			c.JSON(http.StatusConflict, gin.H{"error": "同目录下已存在同名文件"})
+			return
+		}
+
+		// 4. 创建文件记录
+		f := file.File{
+			Name:       req.Name,
+			Hash:       req.Hash,
+			Type:       "file",
+			ParentID:   parentID,
+			OwnerID:    userID,
+			UploadTime: time.Now(),
+		}
+		if err := db.Create(&f).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库写入失败", "detail": err.Error()})
+			return
+		}
+
+		// 5. 更新用户存储空间
+		if err := user.UpdateUserStorageUsed(db, userID, fileContent.Size); err != nil {
+			// 如果更新存储空间失败，回滚文件记录
+			db.Delete(&f)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新存储空间失败", "detail": err.Error()})
+			return
+		}
+
+		// 6. 清理缓存
+		rdb := c.MustGet("redis").(*redis.Client)
+		ctx := context.Background()
+		cacheKey := fmt.Sprintf("user:info:%d", userID)
+		rdb.Del(ctx, cacheKey)
+		fileListPrefix := fmt.Sprintf("filelist:%d:", userID)
+		keys, _ := rdb.Keys(ctx, fileListPrefix+"*").Result()
+		if len(keys) > 0 {
+			rdb.Del(ctx, keys...)
+		}
+
+		// 7. 返回秒传成功响应
 		c.JSON(http.StatusOK, gin.H{
 			"upload_id": "",
 			"instant":   true,
+			"file_id":   f.ID,
+			"message":   "秒传成功",
 		})
 		return
 	} else if err != gorm.ErrRecordNotFound {
-		// 只有当错误不是"记录未找到"时才返回错误
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询文件内容失败", "detail": err.Error()})
 		return
 	}
