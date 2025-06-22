@@ -2,11 +2,25 @@ package handler
 
 import (
 	"cloudDrive/internal/file"
+	"context"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
 )
+
+// RedisInterface 定义Redis客户端接口
+type RedisInterface interface {
+	Ping(ctx context.Context) *redis.StatusCmd
+	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	Get(ctx context.Context, key string) *redis.StringCmd
+	Del(ctx context.Context, keys ...string) *redis.IntCmd
+	Keys(ctx context.Context, pattern string) *redis.StringSliceCmd
+	FlushDB(ctx context.Context) *redis.StatusCmd
+}
 
 type CreateFolderRequest struct {
 	Name     string `json:"name"`
@@ -41,5 +55,27 @@ func CreateFolderHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// 创建文件夹成功后清理缓存
+	redisClient := c.MustGet("redis")
+	ctx := context.Background()
+
+	// 尝试转换为具体的Redis客户端类型
+	if rdb, ok := redisClient.(*redis.Client); ok {
+		// 清理文件列表缓存（所有目录）
+		fileListPrefix := fmt.Sprintf("filelist:%d:", userID)
+		keys, _ := rdb.Keys(ctx, fileListPrefix+"*").Result()
+		if len(keys) > 0 {
+			rdb.Del(ctx, keys...)
+		}
+	} else if rdbInterface, ok := redisClient.(RedisInterface); ok {
+		// 使用接口方法清理缓存
+		fileListPrefix := fmt.Sprintf("filelist:%d:", userID)
+		keys, _ := rdbInterface.Keys(ctx, fileListPrefix+"*").Result()
+		if len(keys) > 0 {
+			rdbInterface.Del(ctx, keys...)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"id": folder.ID, "name": folder.Name})
 }
