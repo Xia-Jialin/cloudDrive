@@ -28,6 +28,7 @@ import (
 	"github.com/gin-contrib/sessions/redis"
 	"github.com/gin-gonic/gin"
 	goredis "github.com/go-redis/redis/v8"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/viper"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
@@ -169,6 +170,14 @@ func main() {
 	// 添加自定义中间件
 	r.Use(middleware.RequestIDMiddleware())
 	r.Use(middleware.ErrorHandlerMiddleware())
+
+	// 添加Prometheus监控中间件（在日志中间件之前）
+	enableMetrics := viper.GetBool("monitoring.metrics_enabled")
+	if enableMetrics {
+		r.Use(middleware.MetricsMiddleware())
+		logger.Info("Prometheus监控已启用", &logger.LogFields{})
+	}
+
 	r.Use(middleware.SkipLoggingMiddleware("/health", "/api/health", "/metrics"))
 
 	// 添加 CORS 跨域中间件，允许携带 cookie
@@ -291,6 +300,26 @@ func main() {
 		log.Printf("已直接连接到块存储服务: %s", chunkServerURL)
 	}
 
+	// 启动监控指标收集器
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if enableMetrics {
+		// 启动系统指标收集器
+		systemCollector := middleware.NewSystemMetricsCollector()
+		go systemCollector.Start(ctx)
+
+		// 启动数据库指标收集器
+		dbCollector := middleware.NewDatabaseMetricsCollector(db)
+		go dbCollector.Start(ctx)
+
+		// 启动Redis指标收集器
+		redisCollector := middleware.NewRedisMetricsCollector(redisClient)
+		go redisCollector.Start(ctx)
+
+		logger.Info("监控指标收集器已启动", &logger.LogFields{})
+	}
+
 	// 注入 db、redis、storage 到 gin.Context
 	r.Use(func(c *gin.Context) {
 		c.Set("db", db)
@@ -347,6 +376,12 @@ func main() {
 	r.GET("/health", handler.HealthCheck)
 	r.GET("/api/health", handler.HealthCheck)
 
+	// Prometheus监控端点
+	if enableMetrics {
+		r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+		logger.Info("Prometheus /metrics端点已启用", &logger.LogFields{})
+	}
+
 	// 注册服务到ETCD
 	etcdEndpoints := strings.Split(*etcdEndpoint, ",")
 	serviceInfo := discovery.ServiceInfo{
@@ -360,8 +395,9 @@ func main() {
 			"api_version": "v1",
 		},
 		Endpoints: map[string]string{
-			"health": "/api/health",
-			"api":    "/api",
+			"health":  "/api/health",
+			"api":     "/api",
+			"metrics": "/metrics",
 		},
 	}
 
@@ -410,8 +446,11 @@ func main() {
 	<-quit
 	log.Println("正在关闭服务器...")
 
+	// 取消监控指标收集器
+	cancel()
+
 	// 设置关闭超时
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// 优雅关闭
