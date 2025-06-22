@@ -4,6 +4,8 @@ import (
 	"cloudDrive/internal/discovery"
 	"cloudDrive/internal/file"
 	"cloudDrive/internal/handler"
+	"cloudDrive/internal/logger"
+	"cloudDrive/internal/middleware"
 	"cloudDrive/internal/storage"
 	"cloudDrive/internal/user"
 	"context"
@@ -31,7 +33,7 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	gormlogger "gorm.io/gorm/logger"
 
 	goetcd "go.etcd.io/etcd/client/v3"
 )
@@ -105,6 +107,24 @@ func main() {
 		}
 	}
 
+	// 初始化结构化日志
+	logConfig := &logger.Config{
+		Level:       viper.GetString("monitoring.log_level"),
+		File:        viper.GetString("monitoring.log_file"),
+		MaxSize:     viper.GetInt("monitoring.log_max_size"),
+		MaxAge:      viper.GetInt("monitoring.log_max_age"),
+		MaxBackups:  viper.GetInt("monitoring.log_max_backups"),
+		Compress:    viper.GetBool("monitoring.log_compress"),
+		Development: viper.GetString("environment") == "development",
+	}
+
+	if err := logger.InitLogger(logConfig); err != nil {
+		log.Fatalf("初始化日志器失败: %v", err)
+	}
+	defer logger.Sync()
+
+	logger.Info("CloudDrive服务启动", &logger.LogFields{})
+
 	dbUser := viper.GetString("database.user")
 	dbPassword := viper.GetString("database.password")
 	dbHost := viper.GetString("database.host")
@@ -122,13 +142,13 @@ func main() {
 		dbUser, dbPassword, dbHost, dbPort, dbName, dbCharset, parseTimeStr, loc)
 
 	// 配置GORM日志
-	gormLogger := logger.Default
+	gormLogger := gormlogger.Default
 	if viper.GetString("environment") == "production" {
 		// 生产环境只记录错误
-		gormLogger = logger.Default.LogMode(logger.Error)
+		gormLogger = gormlogger.Default.LogMode(gormlogger.Error)
 	} else {
 		// 开发环境记录信息
-		gormLogger = logger.Default.LogMode(logger.Info)
+		gormLogger = gormlogger.Default.LogMode(gormlogger.Info)
 	}
 
 	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{
@@ -143,14 +163,20 @@ func main() {
 		log.Fatalf("AutoMigrate failed: %v", err)
 	}
 
-	r := gin.Default()
+	// 创建gin实例，不使用默认中间件
+	r := gin.New()
+
+	// 添加自定义中间件
+	r.Use(middleware.RequestIDMiddleware())
+	r.Use(middleware.ErrorHandlerMiddleware())
+	r.Use(middleware.SkipLoggingMiddleware("/health", "/api/health", "/metrics"))
 
 	// 添加 CORS 跨域中间件，允许携带 cookie
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
+		ExposeHeaders:    []string{"Content-Length", "X-Request-ID"},
 		AllowCredentials: true,
 	}))
 

@@ -1,0 +1,172 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clouddrive-monitoring-config
+  labels:
+    app: clouddrive
+    component: monitoring
+data:
+  # 应用监控配置
+  monitoring.yaml: |
+    log_level: "info"
+    log_file: "/app/logs/app.log"
+    log_max_size: 100  # MB
+    log_max_age: 30    # days
+    log_max_backups: 10
+    log_compress: true
+    metrics_enabled: true
+    health_check_timeout: 5s
+  
+  # Prometheus告警规则
+  alert-rules.yaml: |
+    groups:
+    - name: clouddrive.rules
+      rules:
+      # API服务器健康检查告警
+      - alert: CloudDriveAPIServerDown
+        expr: up{job="api-server"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CloudDrive API服务器宕机"
+          description: "API服务器 {{ $labels.instance }} 已宕机超过1分钟"
+      
+      # 健康检查响应时间告警
+      - alert: CloudDriveHealthCheckSlow
+        expr: http_request_duration_seconds{endpoint="/health"} > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "健康检查响应时间过长"
+          description: "健康检查响应时间 {{ $value }}s 超过100ms阈值"
+      
+      # 内存使用率告警
+      - alert: CloudDriveHighMemoryUsage
+        expr: (container_memory_usage_bytes{pod=~"api-server-.*"} / container_spec_memory_limit_bytes) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "内存使用率过高"
+          description: "Pod {{ $labels.pod }} 内存使用率超过80%"
+      
+      # CPU使用率告警
+      - alert: CloudDriveHighCPUUsage
+        expr: (rate(container_cpu_usage_seconds_total{pod=~"api-server-.*"}[5m]) / container_spec_cpu_quota) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU使用率过高"
+          description: "Pod {{ $labels.pod }} CPU使用率超过80%"
+      
+      # 错误率告警
+      - alert: CloudDriveHighErrorRate
+        expr: (rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API错误率过高"
+          description: "5XX错误率 {{ $value | humanizePercentage }} 超过5%"
+      
+      # 磁盘使用率告警
+      - alert: CloudDriveHighDiskUsage
+        expr: (disk_used_bytes / disk_total_bytes) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "磁盘使用率过高"
+          description: "磁盘使用率 {{ $value | humanizePercentage }} 超过80%"
+  
+  # Grafana仪表板配置
+  dashboard-config.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "CloudDrive监控仪表板",
+        "tags": ["clouddrive", "monitoring"],
+        "timezone": "browser",
+        "panels": [
+          {
+            "title": "API服务器状态",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "up{job=\"api-server\"}",
+                "legendFormat": "{{instance}}"
+              }
+            ]
+          },
+          {
+            "title": "请求QPS",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(http_requests_total[5m])",
+                "legendFormat": "{{method}} {{status}}"
+              }
+            ]
+          },
+          {
+            "title": "响应时间",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+                "legendFormat": "95th percentile"
+              }
+            ]
+          },
+          {
+            "title": "内存使用",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "container_memory_usage_bytes{pod=~\"api-server-.*\"}",
+                "legendFormat": "{{pod}}"
+              }
+            ]
+          }
+        ]
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clouddrive-log-config
+  labels:
+    app: clouddrive
+    component: logging
+data:
+  # Fluentd日志收集配置
+  fluent.conf: |
+    <source>
+      @type tail
+      path /app/logs/*.log
+      pos_file /var/log/fluentd-clouddrive.log.pos
+      tag clouddrive.app
+      format json
+      time_key timestamp
+      time_format %Y-%m-%dT%H:%M:%S.%LZ
+    </source>
+    
+    <filter clouddrive.app>
+      @type record_transformer
+      <record>
+        service_name clouddrive
+        environment "#{ENV['ENVIRONMENT'] || 'production'}"
+      </record>
+    </filter>
+    
+    <match clouddrive.app>
+      @type elasticsearch
+      host elasticsearch
+      port 9200
+      index_name clouddrive-logs
+      type_name _doc
+    </match> 

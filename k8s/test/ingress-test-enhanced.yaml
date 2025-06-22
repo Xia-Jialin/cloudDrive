@@ -1,0 +1,101 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: clouddrive-ingress
+  annotations:
+    # 基础配置
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"  # 允许上传大文件
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    
+    # 新增：监控和日志配置
+    nginx.ingress.kubernetes.io/enable-access-log: "true"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      # 添加请求ID到响应头
+      add_header X-Request-ID $request_id always;
+      # 记录详细的访问日志
+      access_log /var/log/nginx/clouddrive.log main;
+    
+    # 新增：健康检查配置
+    nginx.ingress.kubernetes.io/upstream-health-check: "true"
+    nginx.ingress.kubernetes.io/upstream-health-check-path: "/health"
+    nginx.ingress.kubernetes.io/upstream-health-check-interval: "5s"
+    nginx.ingress.kubernetes.io/upstream-health-check-timeout: "3s"
+    
+    # 新增：速率限制配置
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - clouddrive.test
+    secretName: clouddrive-tls
+  rules:
+  - host: clouddrive.test
+    http:
+      paths:
+      # API路由
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: api-server
+            port:
+              number: 8080
+      # 健康检查路由（直接路由，不经过API前缀）
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: api-server
+            port:
+              number: 8080
+      # 监控指标路由（如果需要外部访问）
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: api-server
+            port:
+              number: 8080
+      # 前端路由
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web-frontend
+            port:
+              number: 80
+---
+# 新增：专门的监控Ingress（内部访问）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: clouddrive-monitoring-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # 限制访问来源（仅内部网络）
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: monitoring.clouddrive.test
+    http:
+      paths:
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: api-server
+            port:
+              number: 8080
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: api-server
+            port:
+              number: 8080 

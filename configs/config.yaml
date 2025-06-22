@@ -31,4 +31,15 @@ storage:
     use_service_discovery: true
     public_url: "http://chunk.clouddrive.local:30080"
 
-environment: "development" 
+environment: "development"
+
+# 监控配置
+monitoring:
+  log_level: "info"
+  log_file: "logs/app.log"
+  log_max_size: 100  # MB
+  log_max_age: 30    # days
+  log_max_backups: 10
+  log_compress: true
+  metrics_enabled: true
+  health_check_timeout: 5s 

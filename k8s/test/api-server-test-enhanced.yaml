@@ -1,0 +1,149 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-server
+  labels:
+    app: api-server
+    version: v1.0.0
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-server
+  template:
+    metadata:
+      labels:
+        app: api-server
+        version: v1.0.0
+      annotations:
+        # Prometheus监控注解
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: api-server
+        image: registry.cn-hangzhou.aliyuncs.com/xiajialin/cloud_drive:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: ETCD_ENDPOINT
+          value: "etcd:2379"
+        - name: ETCD_KEY
+          value: "/clouddrive/server/config"
+        - name: PORT
+          value: "8080"
+        # 新增：监控相关环境变量
+        - name: ENVIRONMENT
+          value: "production"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: ENABLE_METRICS
+          value: "true"
+        volumeMounts:
+        - name: uploads
+          mountPath: /app/uploads
+        # 新增：日志存储卷
+        - name: logs
+          mountPath: /app/logs
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+        # 增强的健康检查配置
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            httpHeaders:
+            - name: X-Request-ID
+              value: "k8s-liveness-probe"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            httpHeaders:
+            - name: X-Request-ID
+              value: "k8s-readiness-probe"
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        # 新增：启动探针
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            httpHeaders:
+            - name: X-Request-ID
+              value: "k8s-startup-probe"
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 6
+      volumes:
+      - name: uploads
+        emptyDir: {}
+      # 新增：日志存储卷
+      - name: logs
+        emptyDir: {}
+      # 新增：优雅关闭配置
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-server
+  labels:
+    app: api-server
+  annotations:
+    # 服务监控注解
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+spec:
+  type: ClusterIP
+  selector:
+    app: api-server
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+    protocol: TCP
+# ServiceMonitor暂时注释掉，需要先安装Prometheus Operator
+# ---
+# apiVersion: monitoring.coreos.com/v1
+# kind: ServiceMonitor
+# metadata:
+#   name: api-server-monitor
+#   labels:
+#     app: api-server
+# spec:
+#   selector:
+#     matchLabels:
+#       app: api-server
+#   endpoints:
+#   - port: http
+#     path: /metrics
+#     interval: 30s
+#     scrapeTimeout: 10s
+---
+# 新增：PodDisruptionBudget确保高可用
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-server-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: api-server 
