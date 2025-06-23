@@ -4,17 +4,17 @@ server:
   upload_max_size: 1073741824  # 1GB
 
 redis:
-  addr: "redis-test:6379"
+  addr: "redis:6379"
   user: ""
   password: ""
   db: 0
   pool_size: 10
 
 storage:
-  type: "minio"
+  type: "local"
   local_dir: "./uploads"
   minio:
-    endpoint: "minio-test:9000"
+    endpoint: "minio:9000"
     access_key: "minioadmin"
     secret_key: "minioadmin"
     bucket: "clouddrive"

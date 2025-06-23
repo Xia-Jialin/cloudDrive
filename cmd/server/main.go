@@ -167,6 +167,9 @@ func main() {
 	// 创建gin实例，不使用默认中间件
 	r := gin.New()
 
+	// 设置最大multipart内存为100MB，用于处理大文件上传
+	r.MaxMultipartMemory = 100 << 20 // 100MB
+
 	// 添加自定义中间件
 	r.Use(middleware.RequestIDMiddleware())
 	r.Use(middleware.ErrorHandlerMiddleware())
@@ -182,7 +185,7 @@ func main() {
 
 	// 添加 CORS 跨域中间件，允许携带 cookie
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173"},
+		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:30081", "http://198.19.249.2:30081"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
 		ExposeHeaders:    []string{"Content-Length", "X-Request-ID"},
